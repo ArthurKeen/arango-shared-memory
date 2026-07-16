@@ -1,0 +1,161 @@
+# Multi-Project Workflow Automation — Setup & Onboarding
+
+This system gives Claude Code (and Cursor) three capabilities across all your projects:
+
+1. **PRD drift detection** (`/prd-sync`) — audits code against its PRD, classifies every requirement
+   IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY, writes open gaps to `drift_alerts`, closes them when
+   fixed. A PostToolUse hook queues a reminder whenever an implementation file is edited; a Stop hook
+   nudges at session end if changes are unsynced.
+2. **Shared solution memory** (`/pattern-search`, `/pattern-save`) — before solving a non-trivial
+   problem, search verified solutions from *any* project; after solving something reusable, save it.
+   Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused, re-ranked by importance ·
+   recency · usage) with an optional **graph** layer of related-pattern links — all executed
+   server-side, so agents pass text and get ranked results (never raw vectors).
+3. **Project registry + read-path analytics** — `project_registry` tracks each project; `search_log`
+   records every search (query, hit, project) so reuse is measurable, not assumed.
+
+All skills degrade gracefully when ArangoDB / the MCP is unreachable, and fall back to keyword-only
+(BM25) when embeddings aren't configured.
+
+> **Single source of truth:** the CLAUDE.md, hooks, and three skills live in `templates/` and are
+> installed by `scripts/bootstrap_project.sh`. **Do not hand-copy skill bodies** — that is exactly how
+> earlier docs drifted out of sync. This document references the templates rather than duplicating them.
+
+---
+
+## Prerequisites
+- **Docker** (for a local ArangoDB) — or access to a shared ArangoDB **3.12.4+**.
+- The ArangoDB server **must be started with `--experimental-vector-index`** for hybrid/graph search.
+- **Python 3.11+ and Poetry.**
+- **An OpenAI API key** for embeddings (hybrid/graph). Optional — without it the system is keyword-only.
+- **Claude Code and/or Cursor.**
+
+## Two repositories (clone both under `~/code/`)
+```bash
+git clone https://github.com/arango-solutions/arango-solutions-mcp.git ~/code/arango-solutions-mcp-server
+# and this repo:
+git clone <arango-shared-memory remote> ~/code/arango-shared-memory
+```
+- **arango-solutions-mcp-server** — the FastMCP server exposing the `arangodb-memory-mcp` tools
+  (`pattern-search`, `save-pattern`, `embed-document`, `execute-aql-query`, …).
+- **arango-shared-memory** (this repo) — setup/phase scripts, project templates, docs.
+
+---
+
+## STEP 0 — ArangoDB (Docker, run once)
+The shared memory uses its own ArangoDB CE container on host port **8539** (so it never collides with
+another ArangoDB on 8529). **The `arangod --experimental-vector-index` flag is required** — without it,
+vector-index creation fails and the system silently stays keyword-only.
+
+```bash
+docker run -d --name shared-memory-arangodb --restart unless-stopped \
+  -p 8539:8529 -e ARANGO_ROOT_PASSWORD=openSesame \
+  -v shared-memory-arango-data:/var/lib/arangodb3 \
+  arangodb/arangodb:latest arangod --experimental-vector-index
+```
+Confirm: `curl -s -u root:openSesame http://localhost:8539/_api/version`
+
+## STEP 1 — Install the server
+```bash
+cd ~/code/arango-solutions-mcp-server && poetry install
+```
+This creates the server's virtualenv (has `python-arango`, `rdflib`, etc.). All scripts below run via
+`poetry run python …` from this directory.
+
+## STEP 2 — Create the schema (run once)
+One idempotent command creates the `memory` database, collections
+(`shared_patterns`, `project_registry`, `drift_alerts`, `search_log`), indexes, and the
+`patterns_search` BM25 view + graded-scoring fields:
+```bash
+poetry run python ~/code/arango-shared-memory/scripts/install.py
+```
+(`install.py` runs `setup_schema.py` → `phase1_setup.py` → `verify.py`. It is safe to re-run. Pass
+`--with-embeddings` to also run `phase1b`/`phase2` once you have a key + at least one pattern.)
+
+## STEP 3 — Register the MCP server (globally, once per tool)
+Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claude.json`) and Cursor
+(`~/.cursor/mcp.json`), under a top-level `"mcpServers"` key:
+```json
+{
+  "command": "poetry",
+  "args": ["run", "python", "main.py"],
+  "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
+  "env": {
+    "ARANGO_HOSTS": "http://localhost:8539",
+    "ARANGO_ROOT_USERNAME": "root",
+    "ARANGO_ROOT_PASSWORD": "openSesame",
+    "ARANGO_DEFAULT_DB_NAME": "memory",
+    "OPENAI_API_KEY": "sk-...your key...",
+    "EMBEDDING_MODEL": "text-embedding-3-small"
+  }
+}
+```
+- `OPENAI_API_KEY` enables hybrid/graph. Omit it to run keyword-only. **Never commit this file / key.**
+- If `poetry` isn't on the launcher PATH, use the absolute path (`which poetry`) or point `command` at
+  `.venv/bin/python` with `args: ["main.py"]`.
+- Reload Cursor / restart Claude Code so the tools load.
+
+## STEP 4 — Verify
+```bash
+cd ~/code/arango-solutions-mcp-server
+poetry run python ~/code/arango-shared-memory/scripts/verify.py
+```
+Green across connectivity, collections, indexes, round-trip, and the `patterns_search` view; the
+**read-path scorecard** shows searches/hit-rate once you start using it. Exit 0 = healthy.
+
+## STEP 5 — Bootstrap each project
+From the project you want to instrument:
+```bash
+~/code/arango-shared-memory/scripts/bootstrap_project.sh --target ~/code/my-api \
+  --project-name "My API" --project-id my-api \
+  --project-type web-api --prd-file docs/PRD.md --tech-stack "TypeScript, Node.js"
+```
+This installs (from `templates/`, filling placeholders) and git-ignores the personal infra:
+- `CLAUDE.md` — project identity + the mandatory `/pattern-search → solve → /pattern-save → /prd-sync` protocol
+- `.claude/settings.json` — the drift hooks (PostToolUse queues on code edits; Stop nudges at session end)
+- `.claude/skills/{prd-sync,pattern-save,pattern-search}/` — the three skills (current versions)
+- `.cursor/rules/workflow.mdc` — the Cursor equivalent
+
+Re-running is safe (skips existing; `--force` overwrites). Then create the project's `PRD.md` and run
+`/prd-sync` to establish its drift baseline. Because `arangodb-memory-mcp` is registered *globally*,
+every bootstrapped project can reach shared memory with no per-project MCP wiring.
+
+## Enabling hybrid + graph (if you skipped it in STEP 2)
+1. Put `OPENAI_API_KEY` + `EMBEDDING_MODEL` in the MCP env (STEP 3) and reload.
+2. Save at least one pattern (`/pattern-save`).
+3. `poetry run python .../phase1b_setup.py` (embeddings + vector index) then `.../phase2_setup.py`
+   (graph edges). `phase2b_extract.py` (gpt-4o LLM edges) and `phase3_lifecycle.py` (supersede/TTL) are
+   periodic maintenance, not required for daily use.
+
+---
+
+## Shared deployment (team) — local → shared ArangoDB
+The value multiplier is a **single shared `memory` DB** so patterns/drift are visible across the whole
+team, not just across one person's projects. Because every script and the MCP tool resolve the host
+from env, switching is a **config change**: set each teammate's `arangodb-memory-mcp` env
+`ARANGO_HOSTS` (and credentials) to the shared host, then run `install.py` once against it.
+
+Checklist for the shared server:
+- Start ArangoDB with `--experimental-vector-index` (ops-owned).
+- Real credentials + TLS (`https://…`, `ARANGO_VERIFY_SSL=true`) — retire `openSesame`.
+- Run `install.py` once against the shared host to create schema + view.
+- Keep the OpenAI key in each teammate's MCP env (or centralize embedding behind the shared server).
+
+**Recommended:** direct shared writes (everyone's MCP → the one shared DB). **Not recommended:**
+local-arango-per-person *syncing* into a shared one — it adds sync lag and cross-instance
+merge/dedup complexity for no benefit on a networked team. If you want private experimentation, use a
+separate local `memory` DB and switch to the shared one via env — two databases, not a sync pipeline.
+
+---
+
+## Troubleshooting
+| Symptom | Cause | Fix |
+|---|---|---|
+| `pattern-search` errors / returns nothing | `patterns_search` view missing | run `install.py` (or `phase1_setup.py`) |
+| Everything keyword-only; no semantic hits | no `OPENAI_API_KEY`, or arangod lacks `--experimental-vector-index` | add the key (STEP 3) + recreate the container with the flag (STEP 0), then `phase1b_setup.py` |
+| Vector index creation fails (`ERR 10`) | server not started with `--experimental-vector-index` | recreate the container with the flag; data persists in the named volume |
+| Drift hook never fires | stale hook reading `$CLAUDE_TOOL_INPUT` | re-bootstrap (current hook reads stdin/`tool_input`); Cursor doesn't run Claude Code hooks — expected |
+| MCP server won't start | `poetry` not on the launcher PATH | use absolute poetry path, or `command: .venv/bin/python`, `args: ["main.py"]` |
+| `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
+| `ERR 1579 access after data-modification` | one AQL reads a collection after modifying it | split into separate statements |
+| Saving a pattern fails: `Expecting type Array` | inserting into a vector-indexed collection without the embedding | use `save-pattern` (embeds then inserts); don't insert-then-embed |

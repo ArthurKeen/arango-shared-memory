@@ -1,0 +1,8 @@
+# Personal workflow-automation infrastructure (kept out of version control).
+# Anchored to the repo root so the reusable copies under templates/ stay tracked.
+/.prd-drift-queue/
+/.claude/
+/CLAUDE.md
+.env
+docs/.env
+*.env
