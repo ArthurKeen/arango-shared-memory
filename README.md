@@ -12,7 +12,8 @@ cross-project capabilities, backed by ArangoDB:
 3. **Project registry + read-path analytics** — `project_registry` tracks each project's state;
    `search_log` records every search so you can measure whether memory is actually being *reused*.
 
-Full design + step-by-step onboarding: **[setup.md](setup.md)**. New teammate? Start there.
+**New teammate? Start with [ONBOARDING.md](ONBOARDING.md)** — cold start to live in ~10 minutes.
+Full design, shared-deployment guidance, and troubleshooting live in **[setup.md](setup.md)**.
 
 ## Two repositories (you need both)
 
