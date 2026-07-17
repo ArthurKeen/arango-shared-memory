@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 try:
     from arango import ArangoClient
@@ -74,6 +75,37 @@ def embed(texts, model, api_key):
     return [it["embedding"] for it in items]
 
 
+def _ensure_vector_index(coll, spec):
+    """Create the vector index, tolerating the remote-cluster ReadTimeout — the build
+    (FAISS training) continues server-side even when the client call times out. Returns
+    True if the index is present afterward, else re-raises the original error."""
+    try:
+        coll.add_index(spec)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if any(ix.get("name") == spec["name"] for ix in coll.indexes()):
+            print(f"    (add_index raised {type(exc).__name__}; index present server-side — continuing)")
+            return True
+        raise
+
+
+def _wait_trained(db, sample_vec, attempts=30, delay=5):
+    """Poll until APPROX_NEAR_COSINE succeeds. A freshly-created vector index can
+    briefly return ERR 1555 'not yet trained' on a remote cluster."""
+    for _ in range(attempts):
+        try:
+            list(db.aql.execute(
+                "FOR p IN shared_patterns SORT APPROX_NEAR_COSINE(p.embedding, @v) DESC "
+                "LIMIT 1 RETURN 1", bind_vars={"v": sample_vec}))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            if "1555" in str(exc) or "not yet trained" in str(exc):
+                time.sleep(delay)
+                continue
+            raise
+    return False
+
+
 def main() -> int:
     hosts = [h.strip() for h in resolve("ARANGO_HOSTS", "http://localhost:8539").split(",") if h.strip()]
     username = resolve("ARANGO_ROOT_USERNAME", "root")
@@ -89,7 +121,10 @@ def main() -> int:
         sys.stderr.write("error: OPENAI_API_KEY not found (env or mcp.json). Set it and retry.\n")
         return 1
 
-    db = ArangoClient(hosts=hosts).db(db_name, username=username, password=password)
+    # request_timeout is generous: on a remote/shared cluster the vector-index build
+    # (FAISS training + latency) routinely outlasts the 60s default. See _ensure_vector_index.
+    client = ArangoClient(hosts=hosts, request_timeout=600)
+    db = client.db(db_name, username=username, password=password)
     if not db.has_collection("shared_patterns"):
         sys.stderr.write("error: shared_patterns missing — run setup_schema.py first.\n")
         return 1
@@ -133,10 +168,19 @@ def main() -> int:
         else:
             n_lists = int(15 * (have ** 0.5))
             n_probe = max(1, n_lists // 8)
-        coll.add_index({"type": "vector", "fields": ["embedding"], "name": "emb_cos_idx",
-                        "params": {"metric": "cosine", "dimension": dim,
-                                   "nLists": n_lists, "defaultNProbe": n_probe}})
+        spec = {"type": "vector", "fields": ["embedding"], "name": "emb_cos_idx",
+                "params": {"metric": "cosine", "dimension": dim,
+                           "nLists": n_lists, "defaultNProbe": n_probe}}
+        _ensure_vector_index(coll, spec)
         print(f"  vector index created (dimension {dim}, nLists {n_lists}, nProbe {n_probe})")
+        # Remote clusters need training time before the index is queryable (ERR 1555).
+        sample = next(iter(db.aql.execute(
+            "FOR p IN shared_patterns FILTER p.embedding != null LIMIT 1 RETURN p.embedding")))
+        if _wait_trained(db, sample):
+            print("  vector index trained and queryable ✓")
+        else:
+            print("  vector index created but still training — APPROX_NEAR_COSINE may return "
+                  "ERR 1555 briefly; re-run verify shortly")
 
     print("\nDone." if not DRY_RUN else "\nDry run complete — no changes made.")
     return 0
