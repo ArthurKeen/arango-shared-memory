@@ -141,6 +141,17 @@ Checklist for the shared server:
 - Run `install.py` once against the shared host to create schema + view.
 - Keep the OpenAI key in each teammate's MCP env (or centralize embedding behind the shared server).
 
+**Rehearsed against a real 3.12.9 cluster (2026-07-16)** — `install.py` (schema + BM25 view +
+round-trip) worked over TLS with real auth on the first try. Two remote-only gotchas surfaced that do
+**not** appear on fast local single-server, so plan for them when running `phase1b_setup.py` on the shared box:
+- **Vector-index build outlasts the client timeout.** `add_index` for the cosine index exceeds
+  python-arango's default 60 s read timeout (FAISS training + latency); the client raises `ReadTimeout`
+  but the index *is* created server-side. Use a longer `request_timeout` and verify with `list-indexes`
+  rather than trusting the call to return.
+- **"Not yet trained" window.** Immediately after, `APPROX_NEAR_COSINE` can fail with
+  `ERR 1555 (not yet trained)` briefly — poll until a trivial vector query succeeds before relying on it.
+  (`phase1b_setup.py` should be given a longer timeout / retry when pointed at a shared cluster.)
+
 **Recommended:** direct shared writes (everyone's MCP → the one shared DB). **Not recommended:**
 local-arango-per-person *syncing* into a shared one — it adds sync lag and cross-instance
 merge/dedup complexity for no benefit on a networked team. If you want private experimentation, use a
@@ -154,6 +165,8 @@ separate local `memory` DB and switch to the shared one via env — two database
 | `pattern-search` errors / returns nothing | `patterns_search` view missing | run `install.py` (or `phase1_setup.py`) |
 | Everything keyword-only; no semantic hits | no `OPENAI_API_KEY`, or arangod lacks `--experimental-vector-index` | add the key (STEP 3) + recreate the container with the flag (STEP 0), then `phase1b_setup.py` |
 | Vector index creation fails (`ERR 10`) | server not started with `--experimental-vector-index` | recreate the container with the flag; data persists in the named volume |
+| `add_index` raises `ReadTimeout` on a remote cluster | FAISS training + latency exceeds the 60s client timeout | raise `request_timeout`; the index is still created server-side — verify with `list-indexes` |
+| `ERR 1555 vector index is not yet trained` | queried a just-created index before training finished (remote) | poll/retry `APPROX_NEAR_COSINE` until it succeeds |
 | Drift hook never fires | stale hook reading `$CLAUDE_TOOL_INPUT` | re-bootstrap (current hook reads stdin/`tool_input`); Cursor doesn't run Claude Code hooks — expected |
 | MCP server won't start | `poetry` not on the launcher PATH | use absolute poetry path, or `command: .venv/bin/python`, `args: ["main.py"]` |
 | `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
