@@ -22,48 +22,57 @@ Full design, shared-deployment guidance, and troubleshooting live in **[setup.md
 | **arango-solutions-mcp-server** | The MCP server (the `arangodb-memory-mcp` tools: `pattern-search`, `save-pattern`, `embed-*`, AQL, etc.) | `git clone https://github.com/arango-solutions/arango-solutions-mcp.git ~/code/arango-solutions-mcp-server` |
 | **arango-shared-memory** (this repo) | Setup/phase scripts, project templates, docs | clone alongside it under `~/code/` |
 
-## Prerequisites
-- **Docker** (local ArangoDB), or access to a shared ArangoDB 3.12.4+ started with `--experimental-vector-index`.
-- **Python 3.11+ and Poetry** (the server installs its deps via `poetry install`).
-- **An OpenAI API key** — required for the hybrid/graph features (server-side embeddings). Without it the
-  system still runs, keyword-only (BM25).
-- **Claude Code and/or Cursor.**
+> **The team runs one shared ArangoDB** (the memory already exists on it). Joining that shared memory
+> is the common case — you do **not** stand up your own database or run any schema setup. The
+> local/standalone path is the *admin* section below.
 
-## Quick start (local, one time)
-
+## Quick start — join the team's shared memory (the common case)
+Prereqs: Python 3.11+ & Poetry, Claude Code and/or Cursor, your own OpenAI API key, and the shared-cluster
+credentials (get these from your team lead — never from a repo). Then:
 ```bash
-# 0. Clone both repos under ~/code (see table above), then install server deps:
+# 1. Clone both repos under ~/code (see table above); install the server:
 cd ~/code/arango-solutions-mcp-server && poetry install
 
-# 1. Start the dedicated ArangoDB — NOTE the --experimental-vector-index flag (required for hybrid/graph):
+# 2. Register the MCP server (id `arangodb-memory-mcp`) in ~/.claude.json AND ~/.cursor/mcp.json,
+#    pointing ARANGO_HOSTS at the shared cluster, with your creds + your own OpenAI key.
+#    Exact JSON: setup.md STEP 3. Then reload Cursor / restart Claude Code.
+
+# 3. Verify you're connected to the shared memory (should show a non-zero pattern count):
+cd ~/code/arango-solutions-mcp-server && poetry run python ~/code/arango-shared-memory/scripts/verify.py
+
+# 4. Bootstrap each project (installs the CURRENT skills/hooks from templates/ — never hand-copy them):
+~/code/arango-shared-memory/scripts/bootstrap_project.sh --target ~/code/my-api \
+  --project-name "My API" --project-id my-api --project-type web-api --prd-file docs/PRD.md
+```
+**Do NOT run `install.py` / `setup_*` / `phase*` against the shared cluster** — those stand up a *new*
+backend, not join an existing one. Full walkthrough: **[ONBOARDING.md](ONBOARDING.md)**.
+
+## Admin — stand up a NEW backend
+Only when creating a fresh shared memory (a new cluster, or a private local one for solo/offline use).
+
+```bash
+cd ~/code/arango-solutions-mcp-server && poetry install
+
+# Local Docker instance — NOTE the --experimental-vector-index flag (required for hybrid/graph):
 docker run -d --name shared-memory-arangodb --restart unless-stopped \
   -p 8539:8529 -e ARANGO_ROOT_PASSWORD=openSesame \
   -v shared-memory-arango-data:/var/lib/arangodb3 \
   arangodb/arangodb:latest arangod --experimental-vector-index
+# (For a hosted cluster instead: skip Docker; just target its host in the env below.)
 
-# 2. Register the MCP server globally (see setup.md STEP 3) with your OpenAI key in its env.
-#    Then reload Cursor / restart Claude Code so the tools load.
-
-# 3. Create the schema + BM25 view + scorecard (idempotent, one-shot):
+# Register the MCP with admin creds + OpenAI key (setup.md STEP 3), reload, then create schema+view:
 poetry run python ~/code/arango-shared-memory/scripts/install.py
-
-# 4. Bootstrap a project (installs the CURRENT skills/hooks from templates/ — never hand-copy them):
-~/code/arango-shared-memory/scripts/bootstrap_project.sh --target ~/code/my-api \
-  --project-name "My API" --project-id my-api --project-type web-api --prd-file docs/PRD.md
-
-# 5. Verify anytime:
-poetry run python ~/code/arango-shared-memory/scripts/verify.py
 ```
+- **Hybrid + graph:** with `OPENAI_API_KEY` set and ≥1 saved pattern, run `phase1b_setup.py` (embeddings +
+  vector index) then `phase2_setup.py` (graph edges), or `install.py --with-embeddings`.
+  `phase2b_extract.py` / `phase3_lifecycle.py` are periodic maintenance.
+- **Provision teammates:** `scripts/add_teammate.py <username>` creates a least-privilege user (rw on
+  `memory` only) and prints creds to hand out; `--revoke` offboards. See setup.md "Shared deployment."
+- **Going local → shared** is a config change, not a code change (env `ARANGO_HOSTS` + real creds/TLS +
+  the vector flag enabled server-side).
 
-`verify.py` checks connectivity, collections, indexes, a write→read→delete round-trip, and prints the
-**adoption + read-path scorecard** (patterns, projects, drift, searches logged, hit rate). Exit 0 = healthy.
-
-## Enabling hybrid + graph (after step 3)
-The installer sets up keyword search immediately. To turn on semantic/vector + graph:
-1. Ensure `OPENAI_API_KEY` (+ `EMBEDDING_MODEL`, default `text-embedding-3-small`) is in the MCP env.
-2. Save at least one pattern (`/pattern-save` in a project).
-3. Run `phase1b_setup.py` (embeddings + vector index) then `phase2_setup.py` (graph edges) — or
-   `install.py --with-embeddings`. `phase2b_extract.py` / `phase3_lifecycle.py` are periodic maintenance.
+`verify.py` (either path) checks connectivity, collections, indexes, a round-trip, and prints the
+**adoption + read-path scorecard** (patterns, projects, drift, searches, hit rate). Exit 0 = healthy.
 
 ## Repository layout
 ```
@@ -81,8 +90,6 @@ scripts/
 templates/                     Source of truth for CLAUDE.md, hooks, and the 3 skills
 ```
 
-## Moving to a shared ArangoDB (team)
-Everything resolves the DB host from env, so going from local to shared is a **config change, not a
-code change**: point each teammate's `arangodb-memory-mcp` env `ARANGO_HOSTS` at the shared host
-(with real credentials + TLS, and the `--experimental-vector-index` flag enabled server-side). See
-setup.md "Shared deployment."
+## More
+Design, shared-deployment operations, teammate provisioning, and a troubleshooting table:
+**[setup.md](setup.md)**. Teammate happy-path: **[ONBOARDING.md](ONBOARDING.md)**.

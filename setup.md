@@ -24,11 +24,12 @@ All skills degrade gracefully when ArangoDB / the MCP is unreachable, and fall b
 ---
 
 ## Prerequisites
-- **Docker** (for a local ArangoDB) — or access to a shared ArangoDB **3.12.4+**.
-- The ArangoDB server **must be started with `--experimental-vector-index`** for hybrid/graph search.
-- **Python 3.11+ and Poetry.**
-- **An OpenAI API key** for embeddings (hybrid/graph). Optional — without it the system is keyword-only.
-- **Claude Code and/or Cursor.**
+- **Python 3.11+ and Poetry**, and **Claude Code and/or Cursor** — everyone.
+- **Shared-cluster credentials** (from your team lead) — for the common "join the shared memory" path.
+- **Your own OpenAI API key** for embeddings (hybrid/graph). Optional — without it the system is keyword-only.
+- **Docker** — *admin only*, for standing up a new local backend (STEP 0). Not needed to join the shared cluster.
+- The ArangoDB server **must be started with `--experimental-vector-index`** for hybrid/graph search
+  (the shared cluster already is; relevant only if you stand up a new backend).
 
 ## Two repositories (clone both under `~/code/`)
 ```bash
@@ -42,7 +43,17 @@ git clone <arango-shared-memory remote> ~/code/arango-shared-memory
 
 ---
 
-## STEP 0 — ArangoDB (Docker, run once)
+## Which path are you on?
+- **Joining the team's shared memory (most people):** the database already exists on the shared
+  cluster — get credentials from your team lead. Do **STEP 1, 3, 4, 5** and **skip STEP 0 and STEP 2**.
+  Do **not** run `install.py` / `setup_*` / `phase*` against the shared cluster (those stand up a *new*
+  backend, and need admin/root). The teammate happy-path is **[ONBOARDING.md](ONBOARDING.md)**.
+- **Admin, standing up a NEW backend** (a fresh shared cluster, or a private local one for solo/offline
+  use): do **STEP 0 → 1 → 2 → 3 → 4**, then provision teammates (see "Shared deployment").
+
+---
+
+## STEP 0 (admin / new backend only) — ArangoDB (Docker, run once)
 The shared memory uses its own ArangoDB CE container on host port **8539** (so it never collides with
 another ArangoDB on 8529). **The `arangod --experimental-vector-index` flag is required** — without it,
 vector-index creation fails and the system silently stays keyword-only.
@@ -62,7 +73,10 @@ cd ~/code/arango-solutions-mcp-server && poetry install
 This creates the server's virtualenv (has `python-arango`, `rdflib`, etc.). All scripts below run via
 `poetry run python …` from this directory.
 
-## STEP 2 — Create the schema (run once)
+## STEP 2 (admin / new backend only) — Create the schema (run once)
+> **Teammates joining the existing shared memory SKIP this** — the schema is already there, and
+> `install.py` needs admin/root anyway. This is only for standing up a new backend.
+
 One idempotent command creates the `memory` database, collections
 (`shared_patterns`, `project_registry`, `drift_alerts`, `search_log`), indexes, and the
 `patterns_search` BM25 view + graded-scoring fields:
@@ -81,15 +95,18 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
   "args": ["run", "python", "main.py"],
   "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
   "env": {
-    "ARANGO_HOSTS": "http://localhost:8539",
-    "ARANGO_ROOT_USERNAME": "root",
-    "ARANGO_ROOT_PASSWORD": "openSesame",
+    "ARANGO_HOSTS": "https://<shared-cluster-host>:8529",
+    "ARANGO_ROOT_USERNAME": "<your username — from your team lead>",
+    "ARANGO_ROOT_PASSWORD": "<your password — DO NOT COMMIT>",
     "ARANGO_DEFAULT_DB_NAME": "memory",
-    "OPENAI_API_KEY": "sk-...your key...",
+    "ARANGO_VERIFY_SSL": "true",
+    "OPENAI_API_KEY": "sk-...your own key...",
     "EMBEDDING_MODEL": "text-embedding-3-small"
   }
 }
 ```
+- Values above are for **joining the shared cluster** (the common case). For a **new local backend**
+  instead, use `"ARANGO_HOSTS": "http://localhost:8539"`, `root` / `openSesame`, and omit `ARANGO_VERIFY_SSL`.
 - `OPENAI_API_KEY` enables hybrid/graph. Omit it to run keyword-only. **Never commit this file / key.**
 - If `poetry` isn't on the launcher PATH, use the absolute path (`which poetry`) or point `command` at
   `.venv/bin/python` with `args: ["main.py"]`.
