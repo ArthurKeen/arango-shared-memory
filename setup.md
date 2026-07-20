@@ -152,6 +152,18 @@ round-trip) worked over TLS with real auth on the first try. Two remote-only got
   `ERR 1555 (not yet trained)` briefly — poll until a trivial vector query succeeds before relying on it.
   (`phase1b_setup.py` should be given a longer timeout / retry when pointed at a shared cluster.)
 
+### Provisioning teammates (per-developer users)
+Give each developer **their own** least-privilege user — better attribution ("who did what"),
+clean offboarding, and no shared password to rotate. The admin runs (root creds resolved from their
+own MCP config):
+```bash
+poetry run python scripts/add_teammate.py <username>          # create: rw on `memory` only, prints creds once
+poetry run python scripts/add_teammate.py <username> --revoke # offboard: deactivate + revoke
+```
+Hand the printed credentials to the developer **out-of-band** (never commit them); they go only in
+that developer's local MCP config. The user gets `rw` on `memory` and **no access** to other databases
+on the shared cluster (verified at creation).
+
 **Recommended:** direct shared writes (everyone's MCP → the one shared DB). **Not recommended:**
 local-arango-per-person *syncing* into a shared one — it adds sync lag and cross-instance
 merge/dedup complexity for no benefit on a networked team. If you want private experimentation, use a
