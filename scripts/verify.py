@@ -94,23 +94,23 @@ def main() -> int:
     c = Checks()
 
     # --- connectivity ---
+    # Connect to the TARGET database directly (not _system): scoped teammate users
+    # have rw on `memory` only and no _system access, so a _system-based check 401s.
+    verify_ssl = resolve("ARANGO_VERIFY_SSL", "true").lower() not in ("0", "false", "no", "off", "")
     try:
-        client = ArangoClient(hosts=hosts)
-        sys_db = client.db("_system", username=username, password=password)
-        version = sys_db.version()
-        c.ok(f"connected to ArangoDB {version}")
+        client = ArangoClient(hosts=hosts, verify_override=verify_ssl)
+        db = client.db(db_name, username=username, password=password)
+        db.properties()  # authenticated round-trip against the target db
     except Exception as exc:  # noqa: BLE001
-        c.fail(f"could not connect: {exc}")
-        print("\nAborting — fix connectivity first.")
+        c.fail(f"could not connect to db {db_name!r} as {username!r}: {exc}")
+        print("\nAborting — fix connectivity / credentials first.")
         return 1
-
-    # --- database exists ---
-    if sys_db.has_database(db_name):
-        c.ok(f"database {db_name!r} exists")
-    else:
-        c.fail(f"database {db_name!r} is missing — run scripts/setup_schema.py")
-        return 1
-    db = client.db(db_name, username=username, password=password)
+    try:
+        ver = db.version()
+    except Exception:  # noqa: BLE001 — /_api/version can require _system; fine to skip
+        ver = "(version check needs _system; skipped for scoped user)"
+    c.ok(f"connected to ArangoDB {ver}")
+    c.ok(f"database {db_name!r} accessible as {username!r}")
 
     # --- collections + indexes ---
     for name in COLLECTIONS:
