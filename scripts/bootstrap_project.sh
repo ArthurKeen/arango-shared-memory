@@ -107,6 +107,8 @@ place ".claude/settings.json" 0
 place ".claude/skills/prd-sync/SKILL.md" 0
 place ".claude/skills/pattern-save/SKILL.md" 0
 place ".claude/skills/pattern-search/SKILL.md" 0
+place ".claude/skills/arangodb-visualizer-customizer/SKILL.md" 0
+place ".claude/skills/arangodb-visualizer-customizer/examples.md" 0
 place ".cursor/rules/workflow.mdc" 1
 
 # Ensure the personal-infra entries are git-ignored in the target project.

@@ -6,3 +6,7 @@
 .env
 docs/.env
 *.env
+
+# Python bytecode cache
+__pycache__/
+*.pyc

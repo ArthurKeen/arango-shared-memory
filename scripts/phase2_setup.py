@@ -7,8 +7,12 @@ similarity edges that power graph-expanded retrieval:
   - pattern_relates_to   shared_patterns <-> shared_patterns  (semantic KNN links)
   - pattern_supersedes   shared_patterns  -> shared_patterns  (reserved; populated
                           when a newer pattern contradicts an older one — Phase 3)
-  - pattern_from_project  shared_patterns -> project_registry (provenance, if the
-                          project is registered)
+  - pattern_from_project  shared_patterns -> project_registry (provenance; a
+                          registry node is auto-created if the project never
+                          ran /prd-sync, so no pattern is left orphaned)
+  - alert_from_project    drift_alerts    -> project_registry (provenance; links
+                          every drift alert, and projects with alerts but no
+                          patterns, to their project node)
 
 `pattern_relates_to` is built from the existing embeddings via ANN KNN (no LLM,
 no new API calls): for each pattern, link its top-K nearest neighbours above a
@@ -37,6 +41,7 @@ except ModuleNotFoundError:
 SERVER_ID = "arangodb-memory-mcp"
 GRAPH = "memory_graph"
 REL, SUP, FROMP = "pattern_relates_to", "pattern_supersedes", "pattern_from_project"
+ALERTP = "alert_from_project"  # drift_alerts -> project_registry (provenance)
 TOP_K = 3          # neighbours per pattern
 MIN_SIM = 0.30     # cosine threshold to create an edge
 DRY_RUN = "--dry-run" in sys.argv
@@ -80,6 +85,8 @@ def main() -> int:
          "to_vertex_collections": ["shared_patterns"]},
         {"edge_collection": FROMP, "from_vertex_collections": ["shared_patterns"],
          "to_vertex_collections": ["project_registry"]},
+        {"edge_collection": ALERTP, "from_vertex_collections": ["drift_alerts"],
+         "to_vertex_collections": ["project_registry"]},
     ]
     if db.has_graph(GRAPH):
         print(f"  graph {GRAPH!r}: already exists")
@@ -90,10 +97,10 @@ def main() -> int:
                 g.create_edge_definition(**ed)
                 print(f"    + edge definition {ed['edge_collection']!r}")
     elif DRY_RUN:
-        print(f"  would create graph {GRAPH!r} with edges {REL}, {SUP}, {FROMP}")
+        print(f"  would create graph {GRAPH!r} with edges {REL}, {SUP}, {FROMP}, {ALERTP}")
     else:
         db.create_graph(GRAPH, edge_definitions=edge_defs)
-        print(f"  graph {GRAPH!r}: created with {REL}, {SUP}, {FROMP}")
+        print(f"  graph {GRAPH!r}: created with {REL}, {SUP}, {FROMP}, {ALERTP}")
 
     if DRY_RUN:
         pats = list(db.aql.execute(
@@ -129,15 +136,41 @@ def main() -> int:
             edges += 1
     print(f"  {REL}: {edges} edge(s) over {len(patterns)} pattern(s) (top {TOP_K}, sim>={MIN_SIM})")
 
-    # 3. pattern_from_project provenance (only where the project is registered).
+    # 3. Provenance. Every pattern and every drift alert links to its project
+    #    node. Auto-create a minimal project_registry node for any project_id
+    #    that has contributed but never ran /prd-sync -- otherwise those patterns
+    #    (and the projects themselves) become orphan islands in the graph. This
+    #    is a full rebuild, so it also backfills patterns added since the last run.
+    db.aql.execute("""
+      FOR pid IN UNIQUE(APPEND(
+            (FOR p IN shared_patterns RETURN p.project_id),
+            (FOR d IN drift_alerts RETURN d.project_id)))
+        FILTER pid != null
+        UPSERT { _key: pid }
+        INSERT { _key: pid, project_id: pid, project_name: pid, project_type: "other",
+                 open_gaps: 0, patterns_contributed: 0, last_sync: null, autocreated: true }
+        UPDATE { } IN project_registry
+    """)
     prov = 0
-    for p in db.aql.execute("FOR p IN shared_patterns RETURN {k: p._key, pid: p.project_id}"):
-        if p["pid"] and db.collection("project_registry").has(p["pid"]):
-            fromp.insert({"_key": ekey(p["k"], p["pid"]),
-                          "_from": f"shared_patterns/{p['k']}",
-                          "_to": f"project_registry/{p['pid']}"}, overwrite=True)
-            prov += 1
+    for p in db.aql.execute(
+            "FOR p IN shared_patterns FILTER p.project_id != null RETURN {k: p._key, pid: p.project_id}"):
+        fromp.insert({"_key": ekey(p["k"], p["pid"]),
+                      "_from": f"shared_patterns/{p['k']}",
+                      "_to": f"project_registry/{p['pid']}"}, overwrite=True)
+        prov += 1
     print(f"  {FROMP}: {prov} provenance edge(s)")
+
+    # 4. alert_from_project provenance -- connects drift alerts (and projects
+    #    that have alerts but no patterns) to their project node.
+    alertp = db.collection(ALERTP)
+    aprov = 0
+    for d in db.aql.execute(
+            "FOR d IN drift_alerts FILTER d.project_id != null RETURN {k: d._key, pid: d.project_id}"):
+        alertp.insert({"_key": ekey(d["k"], d["pid"]),
+                       "_from": f"drift_alerts/{d['k']}",
+                       "_to": f"project_registry/{d['pid']}"}, overwrite=True)
+        aprov += 1
+    print(f"  {ALERTP}: {aprov} provenance edge(s)")
 
     print("\nDone.")
     return 0
