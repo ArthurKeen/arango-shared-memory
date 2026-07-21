@@ -208,6 +208,7 @@ def main() -> int:
     # --- read-path scorecard (is shared memory actually being READ + REUSED?) ---
     print("\nRead-path scorecard  (the value metric — not just writes)")
     print("-" * 64)
+    total_applies, searches = 0, 0
     if db.has_collection("shared_patterns"):
         applied = count("shared_patterns", "FILTER d.usage_count > 0")
         total_applies = next(iter(db.aql.execute(
@@ -216,11 +217,20 @@ def main() -> int:
         npat = count("shared_patterns")
         print(f"  patterns applied (usage_count>0):   {applied}/{npat}   (total applies: {total_applies})")
         print(f"  patterns ever surfaced by search:   {surfaced}/{npat}")
+        funnel = f"{100*applied/surfaced:.0f}%" if surfaced else "n/a"
+        print(f"  surfaced->applied conversion:       {applied}/{surfaced}  ({funnel})   "
+              f"{YELLOW}<- the leak to watch{RESET}")
+        pending = count("shared_patterns", "FILTER d.embedding_pending == true")
+        if pending:
+            print(f"  {YELLOW}embeddings deferred (pending backfill): {pending} "
+                  f"— run pattern-index or phase1b_setup.py{RESET}")
     if db.has_collection("search_log"):
         searches = count("search_log")
         hits = count("search_log", "FILTER d.hit == true")
         rate = f"{100*hits/searches:.0f}%" if searches else "n/a"
         print(f"  searches logged:                    {searches}   (hit rate ≥0.5 relevance: {rate})")
+        apprate = f"{total_applies/searches:.2f}" if searches else "n/a"
+        print(f"  apply events per search:            {apprate}")
         by_proj = list(db.aql.execute(
             "FOR s IN search_log FILTER s.project_id != null COLLECT p = s.project_id "
             "WITH COUNT INTO n SORT n DESC RETURN {p, n}"))

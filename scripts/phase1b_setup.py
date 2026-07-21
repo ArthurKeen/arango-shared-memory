@@ -130,18 +130,21 @@ def main() -> int:
         return 1
     coll = db.collection("shared_patterns")
 
-    # 1. Backfill embeddings.
+    # 1. Backfill embeddings. Includes docs with only a deferred PLACEHOLDER vector
+    #    (embedding_pending == true) — saved via save-pattern during an OpenAI outage —
+    #    not just docs with no embedding at all. The flag is cleared once the real
+    #    vector is stored.
     todo = list(db.aql.execute(
-        "FOR p IN shared_patterns FILTER p.embedding == null "
+        "FOR p IN shared_patterns FILTER p.embedding == null OR p.embedding_pending == true "
         "RETURN {k: p._key, text: CONCAT_SEPARATOR('\n', p.problem_description, p.solution_summary)}"))
-    print(f"  {len(todo)} pattern(s) need embeddings")
+    print(f"  {len(todo)} pattern(s) need embeddings (missing or deferred/pending)")
     if todo and not DRY_RUN:
         # Batch in groups of 100 to bound request size.
         for i in range(0, len(todo), 100):
             batch = todo[i:i + 100]
             vectors = embed([b["text"] or "" for b in batch], model, api_key)
             for b, v in zip(batch, vectors):
-                coll.update({"_key": b["k"], "embedding": v})
+                coll.update({"_key": b["k"], "embedding": v, "embedding_pending": False})
             print(f"    embedded {min(i + 100, len(todo))}/{len(todo)}")
     elif todo:
         print("    would embed and store vectors (dry run)")

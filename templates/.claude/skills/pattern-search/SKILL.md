@@ -53,16 +53,15 @@ Summarize how to adapt the selected pattern; note framework/data-model/constrain
 never blindly copy.
 
 ### Phase 4 — Reinforce on use (IMPORTANT — closes the feedback loop)
-If the user applies a pattern, bump its reinforcement signal so useful patterns rank higher over time:
+If you actually **apply** one or more of the surfaced patterns to solve the problem, record it
+with a single tool call (this is the APPLY side of the read-path funnel — search records what was
+*surfaced*, this records what was *reused*, and it feeds ranking so useful patterns rise over time):
 ```
-Use tool: execute-aql-query
-database_name: "memory"
-bind_vars: { "key": "<applied pattern _key>" }
-query:
-FOR p IN shared_patterns FILTER p._key == @key
-  UPDATE p WITH { usage_count: (p.usage_count == null ? 0 : p.usage_count) + 1,
-                  last_used: DATE_ISO8601(DATE_NOW()) } IN shared_patterns
+Use tool: pattern-applied
+keys: ["<applied pattern _key>", "..."]
 ```
+Pass only the `_key`(s) you genuinely used — not every result shown. Do this as soon as you've
+applied the pattern (don't defer it to session end, where it's easily forgotten). One call, no AQL.
 
 ---
 
