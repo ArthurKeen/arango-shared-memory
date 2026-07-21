@@ -70,54 +70,42 @@ TEST-ONLY (W):
 
 ### Phase 4 — Write to ArangoDB (skip if MCP unavailable)
 
-For each MISSING or PARTIAL requirement, write a drift alert:
+For each MISSING or PARTIAL requirement, write a drift alert with **`save-drift-alert`**
+(NOT a raw `upsert-document` into `drift_alerts`). This tool upserts the alert AND
+links it to its project node via an `alert_from_project` edge, so drift alerts and
+their projects never become orphan nodes in the memory graph:
 
 ```
-Use tool: upsert-document
-collection_name: "drift_alerts"
-search_fields: { "_key": "<PROJECT_ID>_<REQ_ID>" }
-document_data: {
-  "_key": "<PROJECT_ID>_<REQ_ID>",
-  "project_id": "<PROJECT_ID>",
-  "req_id": "<REQ-NNN>",
-  "requirement": "<requirement text>",
-  "status": "open",
-  "classification": "MISSING" | "PARTIAL",
-  "evidence": "<file:line or null>",
-  "gap_description": "<what is missing>",
-  "detected_at": "<ISO timestamp>"
-}
-update_data: {
-  "status": "open",
-  "classification": "MISSING" | "PARTIAL",
-  "evidence": "<file:line or null>",
-  "gap_description": "<what is missing>",
-  "detected_at": "<ISO timestamp>"
-}
+Use tool: save-drift-alert
+project_id: "<PROJECT_ID>"
+req_id: "<REQ-NNN>"
+requirement: "<requirement text>"
+classification: "MISSING" | "PARTIAL"
+status: "open"
+evidence: "<file:line or empty>"
+gap_description: "<what is missing>"
+detected_at: "<ISO timestamp>"
 ```
 
-`search_fields` locates the existing alert; `document_data` is inserted on first
-detection; `update_data` is merged on re-detection (so `project_id`/`req_id` are
-not overwritten and the alert keeps its identity across syncs).
+It is idempotent on `<PROJECT_ID>_<REQ_ID>`: identity (`project_id`/`req_id`) is
+preserved and only the fields you pass are merged on re-detection, so re-running
+`/prd-sync` keeps each alert's identity and its provenance edge.
 
-For each IMPLEMENTED requirement where a previous alert was open, close it:
+For each IMPLEMENTED requirement where a previous alert was open, close it with the
+same tool (pass `status: "closed"` and the closing evidence):
 
 ```
-Use tool: upsert-document
-collection_name: "drift_alerts"
-search_fields: { "_key": "<PROJECT_ID>_<REQ_ID>" }
-document_data: {
-  "_key": "<PROJECT_ID>_<REQ_ID>",
-  "status": "closed",
-  "closed_at": "<ISO timestamp>",
-  "closed_evidence": "<file:line>"
-}
-update_data: {
-  "status": "closed",
-  "closed_at": "<ISO timestamp>",
-  "closed_evidence": "<file:line>"
-}
+Use tool: save-drift-alert
+project_id: "<PROJECT_ID>"
+req_id: "<REQ-NNN>"
+status: "closed"
+closed_at: "<ISO timestamp>"
+closed_evidence: "<file:line>"
 ```
+
+> If your MCP server predates `save-drift-alert`, reload it; as a last resort you
+> can still `upsert-document` into `drift_alerts`, but that leaves the alert an
+> orphan until `phase2_setup.py` next runs.
 
 Update the project registry:
 
