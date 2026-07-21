@@ -356,10 +356,18 @@ def panel_queries(graph_id: str) -> list[dict]:
          "queryText": "FOR e IN alert_from_project LIMIT 300 RETURN e"},
         {"name": "Load: patterns that address requirements",
          "queryText": "FOR e IN pattern_addresses_requirement LIMIT 200 RETURN e"},
+        # NB: AQL cannot iterate a LIST of collections (FOR c IN [coll,...] -> "collection
+        # used as expression operand"). Sample each edge collection in its own subquery and
+        # UNION the results.
         {"name": "Load: full graph (sampled)",
-         "queryText": "FOR c IN [pattern_from_project, alert_from_project, pattern_relates_to,\n"
-                      "          pattern_addresses_requirement, requirement_depends_on, pattern_supersedes]\n"
-                      "  FOR e IN c LIMIT 80 RETURN e"},
+         "queryText": "FOR e IN UNION(\n"
+                      "  (FOR x IN pattern_from_project          LIMIT 15 RETURN x),\n"
+                      "  (FOR x IN alert_from_project            LIMIT 15 RETURN x),\n"
+                      "  (FOR x IN pattern_relates_to            LIMIT 20 RETURN x),\n"
+                      "  (FOR x IN pattern_addresses_requirement LIMIT 15 RETURN x),\n"
+                      "  (FOR x IN requirement_depends_on        LIMIT 10 RETURN x),\n"
+                      "  (FOR x IN pattern_supersedes            LIMIT 10 RETURN x)\n"
+                      ") RETURN e"},
     ]
 
 
