@@ -356,17 +356,20 @@ def panel_queries(graph_id: str) -> list[dict]:
          "queryText": "FOR e IN alert_from_project LIMIT 300 RETURN e"},
         {"name": "Load: patterns that address requirements",
          "queryText": "FOR e IN pattern_addresses_requirement LIMIT 200 RETURN e"},
-        # NB: AQL cannot iterate a LIST of collections (FOR c IN [coll,...] -> "collection
-        # used as expression operand"). Sample each edge collection in its own subquery and
-        # UNION the results.
-        {"name": "Load: full graph (sampled)",
+        # Load the WHOLE graph. NB: AQL cannot iterate a LIST of collections
+        # (FOR c IN [coll,...] -> "collection used as expression operand"), so UNION one
+        # subquery per edge collection. Per-collection LIMIT 500 is only a safety cap far
+        # above current counts (~188 edges total) -- do NOT use a small LIMIT here: an
+        # unordered LIMIT samples arbitrary edges and silently drops whole projects from
+        # the view (that is why a project could seem to "disappear").
+        {"name": "Load: full graph",
          "queryText": "FOR e IN UNION(\n"
-                      "  (FOR x IN pattern_from_project          LIMIT 15 RETURN x),\n"
-                      "  (FOR x IN alert_from_project            LIMIT 15 RETURN x),\n"
-                      "  (FOR x IN pattern_relates_to            LIMIT 20 RETURN x),\n"
-                      "  (FOR x IN pattern_addresses_requirement LIMIT 15 RETURN x),\n"
-                      "  (FOR x IN requirement_depends_on        LIMIT 10 RETURN x),\n"
-                      "  (FOR x IN pattern_supersedes            LIMIT 10 RETURN x)\n"
+                      "  (FOR x IN pattern_from_project          LIMIT 500 RETURN x),\n"
+                      "  (FOR x IN alert_from_project            LIMIT 500 RETURN x),\n"
+                      "  (FOR x IN pattern_relates_to            LIMIT 500 RETURN x),\n"
+                      "  (FOR x IN pattern_addresses_requirement LIMIT 500 RETURN x),\n"
+                      "  (FOR x IN requirement_depends_on        LIMIT 500 RETURN x),\n"
+                      "  (FOR x IN pattern_supersedes            LIMIT 500 RETURN x)\n"
                       ") RETURN e"},
     ]
 
