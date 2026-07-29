@@ -109,10 +109,24 @@ def main() -> int:
             db.create_arangosearch_view(VIEW_NAME, {"links": {"shared_patterns": link}})
             print(f"  view {VIEW_NAME!r}: created over {TEXT_FIELDS}")
 
-    # 3. Phase 1b readiness probe (non-fatal).
+    # 3. Phase 1b readiness probe (non-fatal) — reports the ACTUAL database state,
+    #    not assumptions: vector index present? embedded docs? key resolvable?
     print("\nPhase 1b (vector) readiness:")
-    print("  - vector index requires arangod --experimental-vector-index (currently DISABLED)")
-    print("  - embedding source required (MCP server does not generate embeddings)")
+    coll = db.collection("shared_patterns")
+    idx_present = any(ix.get("type") == "vector" and list(ix.get("fields", [])) == ["embedding"]
+                      for ix in coll.indexes())
+    embedded = next(iter(db.aql.execute(
+        "RETURN LENGTH(FOR p IN shared_patterns FILTER p.embedding != null RETURN 1)")))
+    have_key = bool(resolve("OPENAI_API_KEY", ""))
+    if idx_present:
+        print(f"  - vector index PRESENT ({embedded} embedded doc(s)) — hybrid search active")
+    elif embedded:
+        print(f"  - {embedded} embedded doc(s), no vector index yet — run phase1b_setup.py")
+    elif have_key:
+        print("  - OPENAI_API_KEY resolved — save a pattern, then run phase1b_setup.py")
+    else:
+        print("  - no OPENAI_API_KEY resolved (env or MCP config) — keyword-only until set;")
+        print("    the server must also run with --experimental-vector-index")
     print("  see docs/phase1-implementation.md")
 
     print("\nDone." if not DRY_RUN else "\nDry run complete — no changes made.")

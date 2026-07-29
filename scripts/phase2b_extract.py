@@ -112,36 +112,40 @@ def main() -> int:
         'FOR d IN drift_alerts RETURN {k: d._key, req: d.requirement, '
         'gap: d.gap_description, status: d.status}'))
     print(f"  {len(patterns)} patterns, {len(alerts)} drift alerts")
-    if not patterns or not alerts:
-        print("  nothing to link (need both patterns and drift alerts).");
-        if not DRY_RUN and not alerts:
-            print("\nDone."); return 0
+    if not alerts:
+        # Both LLM passes need alerts; without them there is nothing to link at all.
+        print("  nothing to link (no drift alerts).")
+        print("\nDry run complete — no changes made." if DRY_RUN else "\nDone.")
+        return 0
 
-    plist = "\n".join(f"[{i}] ({p['cat']}) {p['desc']} :: {p['sol'][:200]}"
-                      for i, p in enumerate(patterns))
-
-    # 1. pattern_addresses_requirement — one LLM call per alert.
+    # 1. pattern_addresses_requirement — one LLM call per alert. Needs patterns;
+    #    without them, skip the pass entirely (never send an empty PATTERNS list).
     addr_edges = 0
-    sys_a = ("You link reusable solution PATTERNS to a REQUIREMENT/gap. Return JSON "
-             '{"addresses":[indices]} listing only patterns that directly resolve or '
-             "materially help resolve the requirement. Be conservative; [] if none.")
-    for a in alerts:
-        req = a["req"] or a["gap"] or ""
-        if not req:
-            continue
-        if DRY_RUN:
-            print(f"    would ask {LLM}: which patterns address {a['k']!r}")
-            continue
-        out = llm_json(sys_a, f"REQUIREMENT: {req}\n\nPATTERNS:\n{plist}")
-        for i in out.get("addresses", []):
-            if isinstance(i, int) and 0 <= i < len(patterns):
-                db.collection(ADDR).insert({
-                    "_key": ekey(patterns[i]["k"], a["k"]),
-                    "_from": f"shared_patterns/{patterns[i]['k']}",
-                    "_to": f"drift_alerts/{a['k']}",
-                    "extracted_by": LLM}, overwrite=True)
-                addr_edges += 1
-    print(f"  {ADDR}: {addr_edges} edge(s)")
+    if not patterns:
+        print(f"  {ADDR}: skipped (no patterns to link)")
+    else:
+        plist = "\n".join(f"[{i}] ({p['cat']}) {p['desc']} :: {p['sol'][:200]}"
+                          for i, p in enumerate(patterns))
+        sys_a = ("You link reusable solution PATTERNS to a REQUIREMENT/gap. Return JSON "
+                 '{"addresses":[indices]} listing only patterns that directly resolve or '
+                 "materially help resolve the requirement. Be conservative; [] if none.")
+        for a in alerts:
+            req = a["req"] or a["gap"] or ""
+            if not req:
+                continue
+            if DRY_RUN:
+                print(f"    would ask {LLM}: which patterns address {a['k']!r}")
+                continue
+            out = llm_json(sys_a, f"REQUIREMENT: {req}\n\nPATTERNS:\n{plist}")
+            for i in out.get("addresses", []):
+                if isinstance(i, int) and 0 <= i < len(patterns):
+                    db.collection(ADDR).insert({
+                        "_key": ekey(patterns[i]["k"], a["k"]),
+                        "_from": f"shared_patterns/{patterns[i]['k']}",
+                        "_to": f"drift_alerts/{a['k']}",
+                        "extracted_by": LLM}, overwrite=True)
+                    addr_edges += 1
+        print(f"  {ADDR}: {addr_edges} edge(s)")
 
     # 2. requirement_depends_on — one LLM call over all requirements.
     dep_edges = 0
