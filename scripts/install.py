@@ -86,7 +86,10 @@ def main() -> int:
     hosts = resolve("ARANGO_HOSTS", "http://localhost:8539")
     print(f"Installer target: {hosts}  db={resolve('ARANGO_DEFAULT_DB_NAME','memory')!r}")
 
-    for script in ("setup_schema.py", "phase1_setup.py"):
+    # migrate.py after setup_schema: a brand-new database is a no-op sweep, an
+    # existing one is brought to the current schema (collections, graph defs,
+    # memory_type backfill, edge weights, validation) before the view phase.
+    for script in ("setup_schema.py", "migrate.py", "phase1_setup.py"):
         rc = run(script)
         if rc != 0:
             sys.stderr.write(f"\n{script} failed (exit {rc}) — stopping.\n")
@@ -105,6 +108,7 @@ def main() -> int:
     print(f"\n{'='*64}\nNEXT STEPS")
     print("- Register the MCP server globally (setup.md STEP 3) if not done.")
     print("- Bootstrap projects: scripts/bootstrap_project.sh (installs current skills/hooks).")
+    print("- Schedule periodic maintenance: scripts/install_maintenance_schedule.sh")
     if not have_key:
         print("- For hybrid+graph: add OPENAI_API_KEY + EMBEDDING_MODEL to the MCP env, save a")
         print("  pattern, then run phase1b_setup.py + phase2_setup.py (or re-run with --with-embeddings).")
