@@ -85,7 +85,13 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
+# One timestamp per run, so all backups from a single --force re-run group together.
+RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
+
 # Copy one file from templates to target, optionally rendering placeholders.
+# On --force over an existing file, keep a timestamped backup first: .claude/ and
+# CLAUDE.md are gitignored in target projects, so the backup is the only undo for
+# local customizations (e.g. permissions.allow entries in settings.json).
 place() {
   local rel="$1" do_render="$2"
   local src="$TEMPLATES_DIR/$rel"
@@ -96,6 +102,16 @@ place() {
     return
   fi
   mkdir -p "$(dirname "$dst")"
+  if [ -e "$dst" ]; then
+    # Rendered files never byte-match their template, so the unchanged shortcut
+    # applies only to files copied verbatim.
+    if [ "$do_render" -ne 1 ] && cmp -s "$src" "$dst"; then
+      echo "  unchanged: $rel"
+      return
+    fi
+    cp "$dst" "$dst.pre-update.$RUN_STAMP"
+    echo "  backup: $rel -> $rel.pre-update.$RUN_STAMP"
+  fi
   cp "$src" "$dst"
   if [ "$do_render" -eq 1 ]; then render "$dst"; fi
   echo "  wrote: $rel"
@@ -116,8 +132,11 @@ place ".claude/skills/arangodb-visualizer-customizer/examples.md" 0
 place ".cursor/rules/workflow.mdc" 1
 
 # Ensure the personal-infra entries are git-ignored in the target project.
+# The two *.pre-update.* globs cover --force backups of files living OUTSIDE the
+# already-ignored .claude/ tree (project-root CLAUDE.md, committed .cursor rules).
 GI="$TARGET/.gitignore"
-for entry in ".prd-drift-queue/" ".claude/" "CLAUDE.md" ".no-drift-gate"; do
+for entry in ".prd-drift-queue/" ".claude/" "CLAUDE.md" ".no-drift-gate" \
+             "CLAUDE.md.pre-update.*" ".cursor/rules/workflow.mdc.pre-update.*"; do
   if [ ! -f "$GI" ] || ! grep -qxF "$entry" "$GI"; then
     echo "$entry" >> "$GI"
     echo "  gitignore += $entry"

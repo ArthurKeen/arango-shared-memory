@@ -171,6 +171,10 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
 - **REQ-112** Bootstrap MUST git-ignore all personal infrastructure (`CLAUDE.md`,
   `.claude/`, `.prd-drift-queue/`) in target projects, and MUST install hooks/skills
   only from `templates/` (no hand-copying).
+- **REQ-113** A `--force` re-bootstrap MUST back up every existing file it actually
+  changes as `<file>.pre-update.<timestamp>` before overwriting (byte-identical files
+  are skipped), because the gitignored `.claude/` tree has no git history to recover
+  local customizations from; backups landing outside `.claude/` must be git-ignored.
 
 ## 13. Automation policy (anti-runaway)
 

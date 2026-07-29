@@ -35,6 +35,7 @@ reference [PRD.md](PRD.md).
 | C2 | **Usage-learned edges** | `co_applied` counter bumped by the search skill when ≥2 patterns are applied together; `weight = 0.7·sim + 0.3·log(1+co_applied)/log(11)` recomputed by maintenance | `templates/.claude/skills/pattern-search/SKILL.md`, `scripts/maintain.py` | REQ-023–024 |
 | C3 | **Collection schema validation** | JSON schema, level `moderate`, on all six business collections; applied by setup for new installs and by migration for existing ones | `scripts/setup_schema.py`, `scripts/migrate.py` | REQ-004 |
 | C4 | **Automation policy** | Anti-runaway rules codified in the PRD (§13) and the project template protocol (no auto-apply, hard gates, unattended defaults) | `docs/PRD.md`, `templates/CLAUDE.md` | REQ-120–122 |
+| C5 | **Safe `--force` re-bootstrap** | Files a forced re-run actually changes are first backed up as `<file>.pre-update.<timestamp>` (byte-identical files skipped as `unchanged`); backups outside `.claude/` are git-ignored — the undo for local customizations in a tree with no git history | `scripts/bootstrap_project.sh` | REQ-113 |
 
 ## Workstream D — Migration for existing databases
 

@@ -88,7 +88,9 @@ Installs `CLAUDE.md`, the hooks (session digest, drift queue, stop gate), the sk
 evidence checker (kept in `templates/` — never hand-copy). Use a **unique `--project-id`** (it
 namespaces your patterns/drift in the shared store). Add a `PRD.md`, run `/prd-sync` once for a
 baseline. Repeat per project. Re-run with `--force` after template updates to pick up new
-hooks/skills.
+hooks/skills — anything it actually changes is first backed up as `<file>.pre-update.<timestamp>`,
+so local customizations (like your `settings.json` permission entries) are recoverable: re-apply
+them from the backup after the re-run.
 
 ## 6. Use it
 - Starting a non-trivial problem? **`/pattern-search "<what you're stuck on>"`** first.

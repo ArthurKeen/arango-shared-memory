@@ -149,7 +149,11 @@ This installs (from `templates/`, filling placeholders) and git-ignores the pers
   including `prd-sync/check_evidence.py` (the mechanical evidence gate)
 - `.cursor/rules/workflow.mdc` — the Cursor equivalent (Cursor doesn't run the hooks)
 
-Re-running is safe (skips existing; `--force` overwrites). Then create the project's `PRD.md` and run
+Re-running is safe: without `--force` existing files are skipped; with `--force`, byte-identical
+files are skipped (`unchanged`) and any file that actually changes is first backed up as
+`<file>.pre-update.<timestamp>` — the undo for local customizations (e.g. `permissions.allow`
+entries you added to `settings.json`), since `.claude/` is gitignored and has no git history.
+Then create the project's `PRD.md` and run
 `/prd-sync` to establish its drift baseline. Because `arangodb-memory-mcp` is registered *globally*,
 every bootstrapped project can reach shared memory with no per-project MCP wiring.
 
