@@ -39,11 +39,22 @@ except ModuleNotFoundError:
     sys.exit(2)
 
 SERVER_ID = "arangodb-memory-mcp"
-COLLECTIONS = ["shared_patterns", "project_registry", "drift_alerts"]
+COLLECTIONS = ["shared_patterns", "project_registry", "drift_alerts", "search_log"]
+# Added by scripts/migrate.py (or a current setup_schema.py) — a miss means the
+# database predates the migration round and needs `scripts/migrate.py`.
+MIGRATED_COLLECTIONS = ["prd_patches", "sync_observations", "schema_migrations"]
 PHASE1_VIEW = "patterns_search"
+GRAPH = "memory_graph"
+EDGE_COLLECTIONS = ["pattern_relates_to", "pattern_supersedes", "pattern_from_project",
+                    "alert_from_project", "pattern_addresses_requirement",
+                    "requirement_depends_on", "patch_from_project",
+                    "observation_from_project"]
 EXPECTED_INDEXES = {
     "shared_patterns": ["problem_category", "project_type", "created_at"],
     "drift_alerts": ["project_id", "status", "detected_at"],
+    "search_log": ["project_id", "created_at"],
+    "prd_patches": ["project_id", "review_state", "created_at"],
+    "sync_observations": ["project_id", "state", "created_at"],
 }
 
 GREEN, RED, YELLOW, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
@@ -118,6 +129,11 @@ def main() -> int:
             c.ok(f"collection {name!r} exists")
         else:
             c.fail(f"collection {name!r} missing — run scripts/setup_schema.py")
+    for name in MIGRATED_COLLECTIONS:
+        if db.has_collection(name):
+            c.ok(f"collection {name!r} exists")
+        else:
+            c.fail(f"collection {name!r} missing — run scripts/migrate.py")
     for name, fields in EXPECTED_INDEXES.items():
         if not db.has_collection(name):
             continue
@@ -126,6 +142,13 @@ def main() -> int:
             for idx in db.collection(name).indexes()
         )
         (c.ok if present else c.fail)(f"index on {name} {fields} {'present' if present else 'missing'}")
+
+    # --- schema validation (added by migrate.py / current setup_schema.py) ---
+    if db.has_collection("shared_patterns"):
+        has_schema = bool((db.collection("shared_patterns").properties() or {}).get("schema"))
+        (c.ok if has_schema else c.fail)(
+            "schema validation on shared_patterns "
+            + ("present" if has_schema else "missing — run scripts/migrate.py"))
 
     # --- read/write round-trip (non-polluting: insert then delete) ---
     if db.has_collection("shared_patterns"):
@@ -178,6 +201,50 @@ def main() -> int:
                        "— run scripts/phase1_setup.py")
         else:
             c.info("graded-scoring fields: no patterns yet (nothing to backfill)")
+        # memory_type coverage (taxonomy backfill state).
+        if total:
+            untyped = next(iter(db.aql.execute(
+                "RETURN LENGTH(FOR p IN shared_patterns FILTER p.memory_type == null RETURN 1)")))
+            if untyped == 0:
+                c.ok(f"memory_type present on all {total} memory document(s)")
+            else:
+                c.fail(f"{untyped}/{total} memory document(s) missing memory_type "
+                       "— run scripts/migrate.py")
+
+    # --- graph + vector layer ---
+    # Informational when embeddings were never configured; a hard failure only
+    # when the layer is half-installed (vector index without the graph).
+    vector_idx = False
+    if db.has_collection("shared_patterns"):
+        vector_idx = any(ix.get("type") == "vector" and list(ix.get("fields", [])) == ["embedding"]
+                         for ix in db.collection("shared_patterns").indexes())
+    graph_present = db.has_graph(GRAPH)
+    if graph_present:
+        c.ok(f"graph {GRAPH!r} present")
+        existing_defs = {e["edge_collection"] for e in db.graph(GRAPH).edge_definitions()}
+        missing_defs = [e for e in EDGE_COLLECTIONS if e not in existing_defs]
+        if missing_defs:
+            c.fail(f"edge definitions missing from {GRAPH}: {missing_defs} — run scripts/migrate.py")
+        else:
+            c.ok(f"all {len(EDGE_COLLECTIONS)} edge definitions present")
+        edge_counts = []
+        for e in EDGE_COLLECTIONS:
+            if db.has_collection(e):
+                n = next(iter(db.aql.execute(f"RETURN LENGTH({e})")))
+                if n:
+                    edge_counts.append(f"{e}={n}")
+        if edge_counts:
+            c.info("edges: " + ", ".join(edge_counts))
+    elif vector_idx:
+        c.fail(f"vector index present but graph {GRAPH!r} missing — run scripts/phase2_setup.py")
+    else:
+        c.info(f"graph {GRAPH!r} not installed (no embeddings yet) — phase1b/phase2 when ready")
+    c.info(f"vector index on shared_patterns.embedding: {'present' if vector_idx else 'absent (keyword-only)'}")
+    if db.has_collection("drift_alerts"):
+        ttl = any(ix.get("type") == "ttl" and list(ix.get("fields", [])) == ["closed_at"]
+                  for ix in db.collection("drift_alerts").indexes())
+        c.info(f"TTL index on drift_alerts.closed_at: "
+               f"{'present' if ttl else 'absent — phase3_lifecycle.py adds it'}")
 
     # --- adoption snapshot ---
     print("\nAdoption snapshot")
@@ -193,6 +260,22 @@ def main() -> int:
         opened = count("drift_alerts", 'FILTER d.status == "open"')
         closed = count("drift_alerts", 'FILTER d.status == "closed"')
         print(f"  drift_alerts:      {opened} open / {closed} closed")
+    if db.has_collection("prd_patches"):
+        by_state = list(db.aql.execute(
+            "FOR p IN prd_patches COLLECT s = p.review_state WITH COUNT INTO n RETURN {s, n}"))
+        if by_state:
+            print("  prd_patches:       " + ", ".join(f"{r['s']}={r['n']}" for r in by_state))
+            pending = next((r["n"] for r in by_state if r["s"] == "proposed"), 0)
+            if pending:
+                print(f"      {YELLOW}{pending} proposed patch(es) awaiting review — "
+                      f"run /prd-sync Phase 6 in the affected project(s){RESET}")
+        else:
+            print("  prd_patches:       0")
+    if db.has_collection("sync_observations"):
+        by_state = list(db.aql.execute(
+            "FOR o IN sync_observations COLLECT s = o.state WITH COUNT INTO n RETURN {s, n}"))
+        print("  sync_observations: "
+              + (", ".join(f"{r['s']}={r['n']}" for r in by_state) if by_state else "0"))
     if db.has_collection("project_registry"):
         rows = list(db.aql.execute(
             "FOR p IN project_registry SORT p.project_id RETURN p"))
