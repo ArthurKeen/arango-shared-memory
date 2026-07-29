@@ -1,0 +1,6 @@
+# Runtime dependency for the scripts in scripts/ (the project-side hooks and
+# check_evidence.py are stdlib-only on purpose — they run on teammate machines).
+# The usual way to run the scripts is inside the MCP server's Poetry env, which
+# already provides this; use this file for a standalone venv instead:
+#     python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python-arango>=7.9

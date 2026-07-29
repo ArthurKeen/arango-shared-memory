@@ -4,8 +4,16 @@ Welcome! Our team runs **one shared ArangoDB** so patterns, drift, and project s
 everyone. This gets you connected in ~10 minutes. In every project you opt in you get:
 
 - **`/pattern-search`** — before solving a problem, check solutions teammates already verified.
-- **`/pattern-save`** — after solving something reusable, save it for the whole team.
-- **`/prd-sync`** — audit your code against its PRD; open gaps are tracked automatically.
+- **`/pattern-save`** — after solving something reusable, save it for the whole team (memory
+  types: pattern, feedback, user, project, reference — feedback keeps corrections/confirmed
+  approaches alive across sessions).
+- **`/prd-sync`** — audit your code against its PRD; open gaps are tracked automatically, and
+  when the code has legitimately outgrown the PRD you get a reviewable PRD patch instead of
+  silent divergence.
+- **Automatic session digest** — every session starts with your project's open gaps, PRD
+  staleness, feedback memories, and top relevant patterns injected for you.
+- **A drift stop gate** — if you edited implementation files (or the PRD) and didn't run
+  `/prd-sync`, session end is blocked once with instructions (bypass: `.no-drift-gate` file).
 
 Retrieval is hybrid (semantic + keyword) with a graph of related patterns — you don't need to know
 that to use it. `setup.md` is the deep reference + troubleshooting; this is the happy path.
@@ -76,9 +84,11 @@ From anything under `~/code/`:
   --project-name "My Project" --project-id my-project \
   --project-type web-api --prd-file docs/PRD.md
 ```
-Installs `CLAUDE.md`, the drift hooks, and the three skills (kept in `templates/` — never hand-copy).
-Use a **unique `--project-id`** (it namespaces your patterns/drift in the shared store). Add a `PRD.md`,
-run `/prd-sync` once for a baseline. Repeat per project.
+Installs `CLAUDE.md`, the hooks (session digest, drift queue, stop gate), the skills, and the
+evidence checker (kept in `templates/` — never hand-copy). Use a **unique `--project-id`** (it
+namespaces your patterns/drift in the shared store). Add a `PRD.md`, run `/prd-sync` once for a
+baseline. Repeat per project. Re-run with `--force` after template updates to pick up new
+hooks/skills.
 
 ## 6. Use it
 - Starting a non-trivial problem? **`/pattern-search "<what you're stuck on>"`** first.

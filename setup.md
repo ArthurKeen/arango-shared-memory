@@ -2,17 +2,26 @@
 
 This system gives Claude Code (and Cursor) three capabilities across all your projects:
 
-1. **PRD drift detection** (`/prd-sync`) — audits code against its PRD, classifies every requirement
-   IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY, writes open gaps to `drift_alerts`, closes them when
-   fixed. A PostToolUse hook queues a reminder whenever an implementation file is edited; a Stop hook
-   nudges at session end if changes are unsynced.
-2. **Shared solution memory** (`/pattern-search`, `/pattern-save`) — before solving a non-trivial
-   problem, search verified solutions from *any* project; after solving something reusable, save it.
-   Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused, re-ranked by importance ·
-   recency · usage) with an optional **graph** layer of related-pattern links — all executed
-   server-side, so agents pass text and get ranked results (never raw vectors).
-3. **Project registry + read-path analytics** — `project_registry` tracks each project; `search_log`
-   records every search (query, hit, project) so reuse is measurable, not assumed.
+1. **PRD drift detection, both directions** (`/prd-sync`) — audits code against its PRD, classifies
+   every requirement IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / OUTDATED-PRD, writes open gaps to
+   `drift_alerts`, closes them when fixed, and proposes reviewed PRD patches (`prd_patches`) when the
+   code has legitimately outgrown the spec. Evidence for IMPLEMENTED claims is mechanically verified
+   by `check_evidence.py` before anything is persisted. A PostToolUse hook queues a marker whenever
+   an implementation file — or the PRD itself — is edited; a Stop **gate** blocks session end (once)
+   while the queue is non-empty (`.no-drift-gate` bypasses; `stop_hook_active` prevents loops).
+2. **Shared memory with a taxonomy** (`/pattern-search`, `/pattern-save`) — before solving a
+   non-trivial problem, search verified solutions from *any* project; after solving something
+   reusable, save it. Memory types: `pattern`, `feedback` (with why + how_to_apply), `user`,
+   `project`, `reference`. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused,
+   re-ranked by importance · recency · usage) with a **graph** layer whose edge weights learn from
+   observed co-application — all executed server-side, so agents pass text and get ranked results.
+3. **Automatic recall** — a SessionStart hook injects a per-project digest at session start: open
+   drift gaps, last sync, PRD staleness (content hash vs the stored baseline), the project's
+   feedback memories, and the top-ranked relevant patterns. Fail-open: an unreachable database
+   never breaks a session.
+4. **Project registry + read-path analytics** — `project_registry` tracks each project (including
+   `prd_sha256`); `search_log` records every search (query, hit, project) so reuse is measurable,
+   not assumed.
 
 All skills degrade gracefully when ArangoDB / the MCP is unreachable, and fall back to keyword-only
 (BM25) when embeddings aren't configured.
@@ -78,13 +87,16 @@ This creates the server's virtualenv (has `python-arango`, `rdflib`, etc.). All 
 > `install.py` needs admin/root anyway. This is only for standing up a new backend.
 
 One idempotent command creates the `memory` database, collections
-(`shared_patterns`, `project_registry`, `drift_alerts`, `search_log`), indexes, and the
+(`shared_patterns`, `project_registry`, `drift_alerts`, `search_log`, `prd_patches`,
+`sync_observations`, `schema_migrations`), indexes, JSON schema validation, and the
 `patterns_search` BM25 view + graded-scoring fields:
 ```bash
 poetry run python ~/code/arango-shared-memory/scripts/install.py
 ```
-(`install.py` runs `setup_schema.py` → `phase1_setup.py` → `verify.py`. It is safe to re-run. Pass
-`--with-embeddings` to also run `phase1b`/`phase2` once you have a key + at least one pattern.)
+(`install.py` runs `setup_schema.py` → `migrate.py` → `phase1_setup.py` → `verify.py`. It is safe to
+re-run. Pass `--with-embeddings` to also run `phase1b`/`phase2` once you have a key + at least one
+pattern. On an **existing** database the embedded `migrate.py` step auto-detects and applies only
+what's missing — see "Maintenance & migration" below.)
 
 ## STEP 3 — Register the MCP server (globally, once per tool)
 Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claude.json`) and Cursor
@@ -129,9 +141,13 @@ From the project you want to instrument:
 ```
 This installs (from `templates/`, filling placeholders) and git-ignores the personal infra:
 - `CLAUDE.md` — project identity + the mandatory `/pattern-search → solve → /pattern-save → /prd-sync` protocol
-- `.claude/settings.json` — the drift hooks (PostToolUse queues on code edits; Stop nudges at session end)
-- `.claude/skills/{prd-sync,pattern-save,pattern-search}/` — the three skills (current versions)
-- `.cursor/rules/workflow.mdc` — the Cursor equivalent
+- `.claude/settings.json` — hook wiring + permission allowlist
+- `.claude/hooks/` — `session_recall.py` (SessionStart digest), `drift_queue.py` (PostToolUse:
+  queues code AND PRD edits), `drift_stop_gate.sh` (Stop gate: blocks once while the queue is
+  non-empty; all three are self-configuring from CLAUDE.md and fail open)
+- `.claude/skills/{prd-sync,pattern-save,pattern-search}/` — the skills (current versions),
+  including `prd-sync/check_evidence.py` (the mechanical evidence gate)
+- `.cursor/rules/workflow.mdc` — the Cursor equivalent (Cursor doesn't run the hooks)
 
 Re-running is safe (skips existing; `--force` overwrites). Then create the project's `PRD.md` and run
 `/prd-sync` to establish its drift baseline. Because `arangodb-memory-mcp` is registered *globally*,
@@ -143,6 +159,31 @@ every bootstrapped project can reach shared memory with no per-project MCP wirin
 3. `poetry run python .../phase1b_setup.py` (embeddings + vector index) then `.../phase2_setup.py`
    (graph edges). `phase2b_extract.py` (gpt-4o LLM edges) and `phase3_lifecycle.py` (supersede/TTL) are
    periodic maintenance, not required for daily use.
+
+## Maintenance & migration (admin)
+
+**Migrating an existing database** — `scripts/migrate.py` brings any older `memory` database to the
+current schema by **auto-detection**: each migration inspects the live database and applies only
+when actually needed (collections/indexes added later, all graph edge definitions,
+`memory_type: "pattern"` backfill, edge `weight`/`co_applied` backfill, JSON schema validation).
+Non-destructive by construction — it only adds, never deletes or rewrites. Applied migrations are
+recorded in `schema_migrations`; re-runs self-heal even if the ledger disagrees with reality.
+```bash
+poetry run python ~/code/arango-shared-memory/scripts/migrate.py --dry-run   # preview
+poetry run python ~/code/arango-shared-memory/scripts/migrate.py            # apply
+```
+
+**Periodic maintenance** — `scripts/maintain.py` runs every upkeep pass in the right order:
+embedding backfill (incl. `embedding_pending` re-embeds after edits) → graph rebuild → edge-weight
+recompute (folds co-application into ranking) → patch/observation provenance → supersede/TTL/stale
+→ health check. `--with-llm` adds the gpt-4o edge-extraction pass (costs money); `--dry-run`
+previews. Schedule it once so it runs without attention:
+```bash
+scripts/install_maintenance_schedule.sh                 # weekly launchd job (macOS), 03:00 Sunday
+scripts/install_maintenance_schedule.sh --interval daily
+scripts/install_maintenance_schedule.sh --uninstall
+```
+On non-macOS it prints the crontab line to add. Log: `~/.arango-shared-memory/maintain.log`.
 
 ---
 
@@ -197,6 +238,10 @@ separate local `memory` DB and switch to the shared one via env — two database
 | `add_index` raises `ReadTimeout` on a remote cluster | FAISS training + latency exceeds the 60s client timeout | raise `request_timeout`; the index is still created server-side — verify with `list-indexes` |
 | `ERR 1555 vector index is not yet trained` | queried a just-created index before training finished (remote) | poll/retry `APPROX_NEAR_COSINE` until it succeeds |
 | Drift hook never fires | stale hook reading `$CLAUDE_TOOL_INPUT` | re-bootstrap (current hook reads stdin/`tool_input`); Cursor doesn't run Claude Code hooks — expected |
+| No session digest at start | placeholders unrendered in CLAUDE.md, or DB unreachable (hook fails open by design) | check `PROJECT_ID:` is a real value; run `verify.py`; re-bootstrap with `--force` for the hook files |
+| Session end blocked by the drift gate | `.prd-drift-queue/` non-empty | run `/prd-sync` (clears the queue); it blocks at most once per stop; per-repo bypass: `touch .no-drift-gate` |
+| Insert rejected: "schema validation failed" | document violates the collection's JSON schema (missing project_id, bad enum value) | fix the document — the schema is the guard, not the bug; rules live in `setup_schema.py` |
+| `prd_patches`/`sync_observations` missing | database predates the migration round | `poetry run python .../scripts/migrate.py` |
 | MCP server won't start | `poetry` not on the launcher PATH | use absolute poetry path, or `command: .venv/bin/python`, `args: ["main.py"]` |
 | `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
 | `ERR 1579 access after data-modification` | one AQL reads a collection after modifying it | split into separate statements |

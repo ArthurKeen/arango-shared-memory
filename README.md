@@ -1,16 +1,27 @@
 # arango-shared-memory
 
-A multi-project workflow-automation system that gives Claude Code and Cursor three
+A multi-project workflow-automation system that gives Claude Code and Cursor these
 cross-project capabilities, backed by ArangoDB:
 
-1. **PRD drift detection** (`/prd-sync`) — audits a codebase against its PRD, classifies every
-   requirement IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY, tracks open gaps in `drift_alerts`.
-2. **Shared solution memory** (`/pattern-search`, `/pattern-save`) — a `shared_patterns` store of
-   verified solutions usable from any project. Retrieval is **hybrid** (semantic vector + BM25
-   keyword, fused and re-ranked) with an optional **graph** layer of related-pattern links, all
-   server-side.
-3. **Project registry + read-path analytics** — `project_registry` tracks each project's state;
-   `search_log` records every search so you can measure whether memory is actually being *reused*.
+1. **PRD drift detection, both directions** (`/prd-sync`) — audits a codebase against its PRD,
+   classifies every requirement IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / OUTDATED-PRD,
+   tracks open gaps in `drift_alerts`, and proposes reviewed PRD patches (`prd_patches`) when the
+   code has legitimately outgrown the spec. Every IMPLEMENTED claim is mechanically verified
+   (`check_evidence.py`) before it is persisted.
+2. **Shared memory with a taxonomy** (`/pattern-search`, `/pattern-save`) — a `shared_patterns`
+   store of verified solutions plus `feedback` / `user` / `project` / `reference` memories,
+   usable from any project. Retrieval is **hybrid** (semantic vector + BM25 keyword, fused and
+   re-ranked) with a **graph** layer whose edge weights learn from real co-application.
+3. **Automatic recall + enforcement** — a SessionStart hook injects a per-project digest (open
+   gaps, PRD staleness, feedback memories, top patterns); a PostToolUse hook queues drift markers
+   (code *and* PRD edits); a Stop gate blocks session end (once) while the queue is non-empty.
+4. **Project registry + read-path analytics** — `project_registry` tracks each project's state
+   (including the PRD content hash); `search_log` records every search so you can measure whether
+   memory is actually being *reused*.
+
+The PRD for this system itself is [docs/PRD.md](docs/PRD.md) (yes, `/prd-sync` can audit this
+repo against it). The current change round is documented in
+[docs/implementation-plan.md](docs/implementation-plan.md).
 
 **New teammate? Start with [ONBOARDING.md](ONBOARDING.md)** — cold start to live in ~10 minutes.
 Full design, shared-deployment guidance, and troubleshooting live in **[setup.md](setup.md)**.
@@ -65,7 +76,14 @@ poetry run python ~/code/arango-shared-memory/scripts/install.py
 ```
 - **Hybrid + graph:** with `OPENAI_API_KEY` set and ≥1 saved pattern, run `phase1b_setup.py` (embeddings +
   vector index) then `phase2_setup.py` (graph edges), or `install.py --with-embeddings`.
-  `phase2b_extract.py` / `phase3_lifecycle.py` are periodic maintenance.
+- **Existing database?** `scripts/migrate.py` auto-detects what an older `memory` database is
+  missing (collections, graph definitions, `memory_type` backfill, edge weights, schema
+  validation) and applies only that, non-destructively. `install.py` runs it automatically;
+  `--dry-run` previews. Safe to re-run any time.
+- **Periodic maintenance:** `scripts/maintain.py` runs every upkeep pass in order (embedding
+  backfill, graph rebuild, edge weights, lifecycle, health check). Schedule it once with
+  `scripts/install_maintenance_schedule.sh` (weekly launchd job on macOS; prints the cron line
+  elsewhere).
 - **Provision teammates:** `scripts/add_teammate.py <username>` creates a least-privilege user (rw on
   `memory` only) and prints creds to hand out; `--revoke` offboards. See setup.md "Shared deployment."
 - **Going local → shared** is a config change, not a code change (env `ARANGO_HOSTS` + real creds/TLS +
@@ -77,9 +95,14 @@ poetry run python ~/code/arango-shared-memory/scripts/install.py
 ## Repository layout
 ```
 setup.md                       Full design + onboarding (canonical)
+docs/PRD.md                    The PRD for this system (REQ-numbered; /prd-sync-auditable)
+docs/implementation-plan.md    Current change round: defects, gaps, migration
 scripts/
-  install.py                   One-shot: schema + view + verify (+ optional embeddings/graph)
-  setup_schema.py              Collections + indexes (idempotent)
+  install.py                   One-shot: schema + migrate + view + verify (+ optional embeddings/graph)
+  setup_schema.py              Collections + indexes + JSON schema validation (idempotent)
+  migrate.py                   Auto-detecting, non-destructive migration for existing databases
+  maintain.py                  All periodic passes in order (backfill/graph/weights/lifecycle/verify)
+  install_maintenance_schedule.sh  Schedule maintain.py (launchd on macOS; cron line elsewhere)
   phase1_setup.py              patterns_search view + graded-scoring fields
   phase1b_setup.py             Embeddings + cosine vector index
   phase2_setup.py              Graph: similarity + provenance edges
@@ -87,7 +110,9 @@ scripts/
   phase3_lifecycle.py          Supersede / TTL / staleness (periodic)
   verify.py                    Health check + adoption/read-path scorecard
   bootstrap_project.sh         Scaffold a project from templates/
-templates/                     Source of truth for CLAUDE.md, hooks, and the 3 skills
+templates/                     Source of truth for CLAUDE.md, hooks (session recall, drift
+                               queue, stop gate), and the skills incl. check_evidence.py
+tests/                         DB-free test suite: python3 -m unittest discover tests
 ```
 
 ## More
