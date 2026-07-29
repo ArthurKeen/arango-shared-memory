@@ -63,11 +63,35 @@ keys: ["<applied pattern _key>", "..."]
 Pass only the `_key`(s) you genuinely used — not every result shown. Do this as soon as you've
 applied the pattern (don't defer it to session end, where it's easily forgotten). One call, no AQL.
 
+**If you applied 2+ patterns together**, also record the co-application so relatedness learns from
+real usage (maintenance folds `co_applied` into the edge `weight` that drives graph expansion).
+One `execute-aql-query` call per unordered pair `(A, B)`:
+```
+Use tool: execute-aql-query   database_name: "memory"
+bind_vars: { "a": "shared_patterns/<key A>", "b": "shared_patterns/<key B>",
+             "k": "<LEFT(CONCAT(key A, '__', key B), 250)>" }
+query:
+LET e = FIRST(FOR e IN pattern_relates_to
+  FILTER (e._from == @a AND e._to == @b) OR (e._from == @b AND e._to == @a)
+  LIMIT 1 RETURN e)
+LET key = e == null ? @k : e._key
+UPSERT { _key: key }
+INSERT { _key: key, _from: @a, _to: @b, co_applied: 1 }
+UPDATE { co_applied: (OLD.co_applied == null ? 0 : OLD.co_applied) + 1 }
+IN pattern_relates_to
+```
+Skip silently if `pattern_relates_to` doesn't exist yet (graph layer not installed).
+
 ---
 
 ## Key invariants
 - A pattern is a starting point, not a guarantee. It worked in a different context.
 - Always show `project_id` and `created_at` — stale patterns from very different projects may not apply.
+- Superseded memories (`superseded == true`) must never be presented — a newer pattern replaced them.
+  (The server demotes them to `importance: 1`; the fallback query below excludes them outright.
+  If one still slips into server results, drop it before presenting.)
+- Results can be any `memory_type` (`pattern`, `feedback`, `user`, `project`, `reference`) — show the
+  type when it isn't `pattern`; `feedback` memories carry `why` / `how_to_apply`, present those fields.
 - Only reinforce (Phase 4) patterns the user actually applies — not every result shown.
 - If MCP unavailable: `[PATTERN-SEARCH] ArangoDB unavailable — proceeding without shared memory.`
 
@@ -79,6 +103,8 @@ FOR p IN patterns_search
   SEARCH ANALYZER(p.problem_description IN TOKENS(@q,"text_en")
     OR p.solution_summary IN TOKENS(@q,"text_en")
     OR p.tags IN TOKENS(@q,"text_en"), "text_en")
+  FILTER p.superseded != true
   SORT BM25(p) DESC LIMIT 8 RETURN p
 ```
-(If even the `patterns_search` view is absent: `FOR p IN shared_patterns FILTER @kw IN p.tags ...`.)
+(If even the `patterns_search` view is absent:
+`FOR p IN shared_patterns FILTER p.superseded != true AND @kw IN p.tags ...`.)
