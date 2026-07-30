@@ -24,7 +24,9 @@ COUNT=$(ls .prd-drift-queue 2>/dev/null | wc -l | tr -d ' ')
 case "$COUNT" in ''|*[!0-9]*) exit 0;; esac
 [ "$COUNT" -eq 0 ] && exit 0
 
-PRD_COUNT=$(ls .prd-drift-queue 2>/dev/null | grep -c '^prd_' 2>/dev/null || echo 0)
+# `grep -c` prints 0 AND exits 1 on no match; the old `|| echo 0` appended a second
+# "0" (the "(including 0\n0 PRD edit(s))" glitch). tr yields a single clean integer.
+PRD_COUNT=$(ls .prd-drift-queue 2>/dev/null | grep -c '^prd_' | tr -d ' \n')
 
 python3 - "$COUNT" "$PRD_COUNT" 2>/dev/null <<'PY' || exit 0
 import json, sys

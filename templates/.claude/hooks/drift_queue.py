@@ -43,6 +43,23 @@ def main() -> int:
     if not file_path:
         return 0
 
+    # Only queue drift for files inside THIS project. An absolute path pointing at
+    # another repo (e.g. a sibling library edited in the same session) must not queue
+    # drift here — otherwise the Stop gate fires on unrelated cross-repo edits. Also
+    # skip .claude/ internals (hooks/config/skills), which aren't PRD-tracked code.
+    # realpath (not abspath) on both sides so a project under a symlinked path
+    # (e.g. macOS /tmp -> /private/tmp) still compares correctly.
+    repo_root = os.path.realpath(os.getcwd())
+    abs_path = os.path.realpath(file_path)
+    try:
+        inside = os.path.commonpath([repo_root, abs_path]) == repo_root
+    except ValueError:  # different drives / relative-vs-absolute mismatch
+        inside = False
+    if not inside:
+        return 0
+    if os.path.relpath(abs_path, repo_root).split(os.sep, 1)[0] == ".claude":
+        return 0
+
     base = os.path.basename(file_path)
     prd = prd_file_from_claude_md()
     is_prd = bool(prd) and (

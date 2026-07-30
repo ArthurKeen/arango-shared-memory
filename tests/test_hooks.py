@@ -79,6 +79,23 @@ class TestDriftQueue(TmpProject):
         self.assertEqual(self.queue_files(), [])
         self.assertEqual(proc.stdout, "")
 
+    def test_out_of_repo_source_edit_is_ignored(self):
+        # An absolute source path outside the project (e.g. a sibling repo edited in
+        # the same session) must NOT queue drift here.
+        with tempfile.TemporaryDirectory() as other:
+            outside = os.path.join(other, "lib", "thing.py")
+            proc = self.run_hook({"tool_input": {"file_path": outside}})
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self.queue_files(), [])
+        self.assertEqual(proc.stdout, "")
+
+    def test_dot_claude_edit_is_ignored(self):
+        # .claude/ internals (hooks/config/skills) are not PRD-tracked implementation.
+        proc = self.run_hook({"tool_input": {"file_path": ".claude/hooks/drift_queue.py"}})
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self.queue_files(), [])
+        self.assertEqual(proc.stdout, "")
+
     def test_garbage_stdin_fails_open(self):
         proc = self.run_hook("this is not json")
         self.assertEqual(proc.returncode, 0)
