@@ -123,6 +123,7 @@ place ".claude/settings.json" 0
 place ".claude/hooks/session_recall.py" 0
 place ".claude/hooks/drift_queue.py" 0
 place ".claude/hooks/drift_stop_gate.sh" 0
+place ".claude/hooks/capture_candidates.py" 0
 place ".claude/skills/prd-sync/SKILL.md" 0
 place ".claude/skills/prd-sync/check_evidence.py" 0
 place ".claude/skills/pattern-save/SKILL.md" 0
@@ -135,7 +136,7 @@ place ".cursor/rules/workflow.mdc" 1
 # The two *.pre-update.* globs cover --force backups of files living OUTSIDE the
 # already-ignored .claude/ tree (project-root CLAUDE.md, committed .cursor rules).
 GI="$TARGET/.gitignore"
-for entry in ".prd-drift-queue/" ".claude/" "CLAUDE.md" ".no-drift-gate" \
+for entry in ".prd-drift-queue/" ".pattern-capture-queue/" ".claude/" "CLAUDE.md" ".no-drift-gate" \
              "CLAUDE.md.pre-update.*" ".cursor/rules/workflow.mdc.pre-update.*"; do
   if [ ! -f "$GI" ] || ! grep -qxF "$entry" "$GI"; then
     echo "$entry" >> "$GI"
