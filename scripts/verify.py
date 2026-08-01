@@ -314,6 +314,15 @@ def main() -> int:
         print(f"  searches logged:                    {searches}   (hit rate ≥0.5 relevance: {rate})")
         apprate = f"{total_applies/searches:.2f}" if searches else "n/a"
         print(f"  apply events per search:            {apprate}")
+    if db.has_collection("eval_runs"):
+        last = next(iter(db.aql.execute(
+            "FOR r IN eval_runs SORT r.run_at DESC LIMIT 1 RETURN r")), None)
+        if last:
+            summary = "  ".join(f"{m}: MRR={v['mrr']:.2f} R@5={v['recall@5']:.2f}"
+                                for m, v in sorted(last["modes"].items()))
+            print(f"  retrieval eval ({last['run_at'][:10]}, n={last['n_queries']}): {summary}")
+        else:
+            print(f"      {YELLOW}(no eval runs yet — run scripts/eval_retrieval.py){RESET}")
         by_proj = list(db.aql.execute(
             "FOR s IN search_log FILTER s.project_id != null COLLECT p = s.project_id "
             "WITH COUNT INTO n SORT n DESC RETURN {p, n}"))

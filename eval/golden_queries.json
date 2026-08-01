@@ -1,0 +1,125 @@
+{
+  "_comment": "Golden retrieval-eval set: query -> acceptable expected pattern _keys (any-of). Categories: paraphrase (semantic recall, low lexical overlap), keyword (error-code/term lookup, BM25), concept (vague cross-project). Synced into the eval_queries collection and scored by scripts/eval_retrieval.py. Keep queries phrased the way a developer would actually type them mid-problem; never paste a pattern's problem_description verbatim.",
+  "queries": [
+    {
+      "_key": "eq_hook_silent",
+      "category": "paraphrase",
+      "query": "Claude Code hook is configured but silently does nothing when I edit a file - no queue marker ever appears",
+      "expected": ["arango-shared-memory_other_20260705_a"]
+    },
+    {
+      "_key": "eq_readback_after_update",
+      "category": "paraphrase",
+      "query": "AQL query that updates a collection and then reads it back in the same query fails",
+      "expected": ["iam_data-model_20260709_152231"]
+    },
+    {
+      "_key": "eq_insert_needs_embedding",
+      "category": "paraphrase",
+      "query": "inserting documents fails once the collection has a vector index because the docs lack the embedding field",
+      "expected": ["arango-shared-memory_data-model_20260708_032708", "arango-shared-memory_testing_20260709_000008"]
+    },
+    {
+      "_key": "eq_docker_flag_preserve",
+      "category": "paraphrase",
+      "query": "enable an experimental arangod startup flag on an existing Docker container without losing the data volume",
+      "expected": ["arango-shared-memory_deployment_20260705_c"]
+    },
+    {
+      "_key": "eq_edge_mistyped_copy",
+      "category": "paraphrase",
+      "query": "after copying a database the edge collections came out as document collections and graph creation fails",
+      "expected": ["arango-shared-memory_data-model_20260720_222954"]
+    },
+    {
+      "_key": "eq_ttl_migration_loss",
+      "category": "paraphrase",
+      "query": "closed documents vanished right after recreating a TTL index during a data migration",
+      "expected": ["arango-shared-memory_data-model_20260720_223015"]
+    },
+    {
+      "_key": "eq_cors_methods",
+      "category": "paraphrase",
+      "query": "browser reports blocked by CORS policy after tightening allow_methods in the FastAPI middleware",
+      "expected": ["multi-tenant-time-travel-architecture_api-design_20260709_162559"]
+    },
+    {
+      "_key": "eq_remote_vector_timeout",
+      "category": "paraphrase",
+      "query": "vector index creation on a shared remote cluster hits a 60 second client timeout and afterwards queries complain the index is not trained",
+      "expected": ["arango-shared-memory_deployment_20260717_003211"]
+    },
+    {
+      "_key": "eq_err1579",
+      "category": "keyword",
+      "query": "ERR 1579 access after data-modification",
+      "expected": ["iam_data-model_20260709_152231"]
+    },
+    {
+      "_key": "eq_err1555",
+      "category": "keyword",
+      "query": "ERR 1555 vector index not yet trained",
+      "expected": ["arango-shared-memory_deployment_20260717_003211"]
+    },
+    {
+      "_key": "eq_expecting_array",
+      "category": "keyword",
+      "query": "insert fails Expecting type Array vector index",
+      "expected": ["arango-shared-memory_data-model_20260708_032708", "arango-shared-memory_testing_20260709_000008"]
+    },
+    {
+      "_key": "eq_ssl_cert_file",
+      "category": "keyword",
+      "query": "SSL_CERT_FILE No such file or directory httpx OpenAI request fails",
+      "expected": ["arango-solutions-mcp-server_deployment_20260716_012710"]
+    },
+    {
+      "_key": "eq_with_clause_cluster",
+      "category": "keyword",
+      "query": "AQL graph traversal on cluster fails asking for WITH clause, works on single server",
+      "expected": ["jlr-contextual-memory-fabric_data-model_20260705_161750", "iam_other_20260709_234307"]
+    },
+    {
+      "_key": "eq_upsert_noop",
+      "category": "keyword",
+      "query": "upsert-document MCP tool wrong parameters silent no-op nothing written",
+      "expected": ["arango-shared-memory_data-model_20260705_b"]
+    },
+    {
+      "_key": "eq_rag_grounding",
+      "category": "concept",
+      "query": "keep LLM answers strictly limited to the retrieved authorized context so it cannot make things up",
+      "expected": ["jlr-contextual-memory-fabric_other_20260705_161750"]
+    },
+    {
+      "_key": "eq_pagerank_noise",
+      "category": "concept",
+      "query": "graph centrality results dominated by dense uninteresting background nodes in a demo dataset",
+      "expected": ["project-sentinel_performance_20260723_144200", "fraud-intelligence_data-model_20260716_155407"]
+    },
+    {
+      "_key": "eq_er_review_flood",
+      "category": "concept",
+      "query": "entity resolution generates too many junk match candidates for reviewers to wade through",
+      "expected": ["project-sentinel_data-model_20260722_184321"]
+    },
+    {
+      "_key": "eq_offline_report",
+      "category": "concept",
+      "query": "produce a shareable report with charts that must work without internet or LLM calls during a customer demo",
+      "expected": ["project-sentinel_other_20260723_144209", "project-sentinel_api-design_20260729_142641"]
+    },
+    {
+      "_key": "eq_bitemporal_retrofit",
+      "category": "concept",
+      "query": "add as-of time travel to a graph whose edges only carry a last-update timestamp",
+      "expected": ["iam_data-model_20260709_152243"]
+    },
+    {
+      "_key": "eq_spurious_classes",
+      "category": "concept",
+      "query": "schema discovery invents hundreds of bogus classes for a plain property graph",
+      "expected": ["iam_data-model_20260716_012746"]
+    }
+  ]
+}
