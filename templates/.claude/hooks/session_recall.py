@@ -6,8 +6,9 @@ staleness (content hash vs project_registry.prd_sha256), the project's feedback
 memories, and the top-ranked relevant memories for this project/type — so recall
 happens automatically instead of depending on someone remembering /pattern-search.
 
-Self-configuring: PROJECT_ID / PROJECT_TYPE / PRD_FILE are parsed from ./CLAUDE.md
-at runtime; credentials resolve env -> arangodb-memory-mcp MCP config -> defaults
+Self-configuring: PROJECT_ID / PROJECT_TYPE / PRD_FILE are parsed at runtime from
+./AGENTS.md (the consolidated canonical agent doc) with ./CLAUDE.md as the legacy
+fallback; credentials resolve env -> arangodb-memory-mcp MCP config -> defaults
 (the same three-tier chain every script uses). stdlib only — no python-arango.
 
 FAIL-OPEN BY DESIGN: any error, missing config, or slow network exits 0 silently
@@ -29,20 +30,32 @@ SERVER_ID = "arangodb-memory-mcp"
 TIMEOUT = 4  # seconds per HTTP call; the whole hook budget is ~10s
 
 
-def parse_claude_md(path="CLAUDE.md"):
-    """Extract PROJECT_ID / PROJECT_TYPE / PRD_FILE from the project CLAUDE.md."""
+def parse_claude_md(path=None):
+    """Extract PROJECT_ID / PROJECT_TYPE / PRD_FILE from the project's agent-doc.
+
+    AGENTS.md (the consolidated canonical doc) is preferred; CLAUDE.md is the
+    legacy fallback. Each field is taken from the first file that supplies a
+    concrete (non-placeholder) value. An explicit ``path`` reads only that file.
+    """
+    paths = [path] if path is not None else ["AGENTS.md", "CLAUDE.md"]
+    fields = (("project_id", r"PROJECT_ID:\s*([A-Za-z0-9._-]+)"),
+              ("project_type", r"PROJECT_TYPE:\s*([A-Za-z0-9._-]+)"),
+              ("prd_file", r"PRD_FILE:\s*(\S+)"))
     out = {}
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
-        return out
-    for key, pat in (("project_id", r"PROJECT_ID:\s*([A-Za-z0-9._-]+)"),
-                     ("project_type", r"PROJECT_TYPE:\s*([A-Za-z0-9._-]+)"),
-                     ("prd_file", r"PRD_FILE:\s*(\S+)")):
-        m = re.search(pat, text)
-        if m and not m.group(1).startswith("<"):
-            out[key] = m.group(1)
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for key, pat in fields:
+            if key in out:
+                continue
+            m = re.search(pat, text)
+            if m and not m.group(1).startswith("<"):
+                out[key] = m.group(1)
+        if len(out) == len(fields):
+            break
     return out
 
 

@@ -21,7 +21,7 @@ CLAUDE.md) so the read is logged for per-project analytics:
 ```
 Use tool: pattern-search
 query_text: "<the full problem description>"
-project_id: "<PROJECT_ID from CLAUDE.md>"
+project_id: "<PROJECT_ID from AGENTS.md>"
 limit: 8
 ```
 Returns `{ mode: "hybrid"|"bm25", count, patterns: [ { _key, project_id, project_type,

@@ -6,8 +6,9 @@ Reads the hook payload from stdin. Two triggers:
   - the project's PRD file was edited  -> marker  prd_<epoch>_<basename>
     (requirements may have changed, not just code — a distinct signal)
 
-PRD_FILE is parsed from ./CLAUDE.md at runtime, so this hook needs no
-per-project rendering. Fail-open: any error exits 0 silently.
+PRD_FILE is parsed at runtime from ./AGENTS.md (canonical) with ./CLAUDE.md as
+the legacy fallback, so this hook needs no per-project rendering. Fail-open: any
+error exits 0 silently.
 """
 
 from __future__ import annotations
@@ -22,14 +23,17 @@ SOURCE_EXT = re.compile(
     r"\.(ts|js|tsx|jsx|py|go|rs|java|cs|cpp|c|rb|php|swift|kt)$", re.IGNORECASE)
 
 
-def prd_file_from_claude_md(path="CLAUDE.md"):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            m = re.search(r"PRD_FILE:\s*(\S+)", fh.read())
+def prd_file_from_claude_md(path=None):
+    """Read PRD_FILE from the project's agent-doc — AGENTS.md (canonical) preferred,
+    CLAUDE.md the legacy fallback. An explicit ``path`` reads only that file."""
+    for p in ([path] if path is not None else ["AGENTS.md", "CLAUDE.md"]):
+        try:
+            with open(p, encoding="utf-8") as fh:
+                m = re.search(r"PRD_FILE:\s*(\S+)", fh.read())
+        except OSError:
+            continue
         if m and not m.group(1).startswith("<"):
             return m.group(1)
-    except OSError:
-        pass
     return None
 
 

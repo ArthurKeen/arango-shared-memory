@@ -32,7 +32,7 @@ Then gather (ask the user if not already clear from context):
    (for `feedback`: the guidance itself)
 4. **Tags**: 2-5 keywords
 
-Infer from CLAUDE.md without asking: `project_id`, `project_type`, `project_name`.
+Infer from `AGENTS.md` (or `CLAUDE.md`) without asking: `project_id`, `project_type`, `project_name`.
 
 Also rate **importance** 1–10 yourself (no need to ask): how broadly reusable / high-impact is this
 pattern? `1` = mundane/project-specific, `10` = a technique many projects will need. This drives
@@ -72,8 +72,8 @@ Use tool: save-pattern
 problem_description: "<one-sentence>"
 solution_summary:    "<2-5 sentences>"
 problem_category:    "<category>"
-project_id:          "<PROJECT_ID from CLAUDE.md>"
-project_type:        "<project_type from CLAUDE.md>"
+project_id:          "<PROJECT_ID from AGENTS.md>"
+project_type:        "<project_type from AGENTS.md>"
 tags:                ["<tag1>", "<tag2>"]
 importance:          <1-10>
 source_file:         "<relevant file:line if applicable>"

@@ -18,7 +18,7 @@ alwaysApply: true
 1. Search shared memory first via the `pattern-search` MCP tool (server-side hybrid
    semantic + keyword retrieval — pass text, get ranked results):
    - `query_text`: the full problem description
-   - `project_id`: the PROJECT_ID from CLAUDE.md
+   - `project_id`: the PROJECT_ID from AGENTS.md (or CLAUDE.md)
    - `limit`: 8
 2. Present the top results (problem, solution, tags, source project) and ask which to apply.
 3. If you apply one or more results, record it with the `pattern-applied` tool

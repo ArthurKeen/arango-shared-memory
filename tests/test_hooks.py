@@ -174,6 +174,35 @@ class TestSessionRecallParsing(unittest.TestCase):
         self.assertEqual(self.mod.parse_claude_md(
             os.path.join(self.dir.name, "nope.md")), {})
 
+    def test_agents_md_is_preferred_over_claude_md(self):
+        # AGENTS.md (the consolidated canonical doc) wins when both exist; a stale
+        # CLAUDE.md left over from the migration must not shadow it.
+        with open(os.path.join(self.dir.name, "AGENTS.md"), "w") as fh:
+            fh.write("- PROJECT_ID: from-agents\n- PRD_FILE: docs/PRD.md\n")
+        with open(os.path.join(self.dir.name, "CLAUDE.md"), "w") as fh:
+            fh.write("- PROJECT_ID: from-claude\n- PRD_FILE: STALE.md\n")
+        cwd = os.getcwd()
+        os.chdir(self.dir.name)  # no-arg parse resolves relative names against CWD
+        try:
+            cfg = self.mod.parse_claude_md()
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(cfg["project_id"], "from-agents")
+        self.assertEqual(cfg["prd_file"], "docs/PRD.md")
+
+    def test_falls_back_to_claude_md_when_no_agents_md(self):
+        # Legacy repos that never migrated (only CLAUDE.md present) still resolve.
+        with open(os.path.join(self.dir.name, "CLAUDE.md"), "w") as fh:
+            fh.write(CLAUDE_MD)
+        cwd = os.getcwd()
+        os.chdir(self.dir.name)
+        try:
+            cfg = self.mod.parse_claude_md()
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(cfg["project_id"], "demo-api")
+        self.assertEqual(cfg["prd_file"], "docs/PRD.md")
+
 
 class TestSessionRecallFailOpen(TmpProject):
     def run_hook(self, with_claude_md=True):

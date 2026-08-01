@@ -14,7 +14,7 @@ Every requirement must have a `file:line` evidence reference or be classified as
 ## Protocol
 
 ### Phase 0 — Locate the PRD + staleness check
-Read `PRD_FILE` from CLAUDE.md. If not found, search for files matching `*PRD*`, `*requirements*`, `*spec*` in `docs/`. If still not found, ask the user.
+Read `PRD_FILE` from `AGENTS.md` (the consolidated canonical agent doc), falling back to `CLAUDE.md` if `AGENTS.md` is absent or has no identity block. If not found, search for files matching `*PRD*`, `*requirements*`, `*spec*` in `docs/`. If still not found, ask the user.
 
 Compute the PRD content hash and compare it to the stored one:
 ```bash
@@ -222,7 +222,7 @@ search_fields: { "_key": "<PROJECT_ID>" }
 document_data: {
   "_key": "<PROJECT_ID>",
   "project_id": "<PROJECT_ID>",
-  "project_name": "<PROJECT_NAME from CLAUDE.md>",
+  "project_name": "<PROJECT_NAME from AGENTS.md>",
   "prd_path": "<PRD_FILE>",
   "last_sync": "<ISO timestamp>",
   "open_gaps": <count of MISSING + PARTIAL>,
