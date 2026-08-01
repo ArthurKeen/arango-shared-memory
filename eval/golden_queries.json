@@ -120,6 +120,60 @@
       "category": "concept",
       "query": "schema discovery invents hundreds of bogus classes for a plain property graph",
       "expected": ["iam_data-model_20260716_012746"]
+    },
+    {
+      "_key": "eq_risk_propagation_demo",
+      "category": "concept",
+      "query": "show that entity resolution actually changes the downstream risk and UBO conclusions, not just that it dedupes records",
+      "expected": ["project-sentinel_data-model_20260722_221544", "project-sentinel_data-model_20260722_184321"]
+    },
+    {
+      "_key": "eq_owl_shacl_modeling",
+      "category": "concept",
+      "query": "model AWS services as OWL classes with SHACL restriction shapes and align the ontology with PROV-O and SKOS",
+      "expected": ["aws-ontology_data-model_20260722_231755"]
+    },
+    {
+      "_key": "eq_shacl_severity",
+      "category": "paraphrase",
+      "query": "use SHACL Violation vs Warning severities to surface known data-completeness gaps without failing CI",
+      "expected": ["aws-ontology_data-model_20260722_231755"]
+    },
+    {
+      "_key": "eq_arn_backfill",
+      "category": "concept",
+      "query": "backfill a required identifier like an ARN across many existing ontology individuals without inventing values",
+      "expected": ["aws-ontology_data-model_20260729_215137"]
+    },
+    {
+      "_key": "eq_graph_investigation_ui",
+      "category": "concept",
+      "query": "build a graph investigation UI with a Cytoscape canvas, risk-lens repaint and a provenance drill-down, offline and without a bundler",
+      "expected": ["project-sentinel_api-design_20260729_142641"]
+    },
+    {
+      "_key": "eq_async_mcp_offload",
+      "category": "paraphrase",
+      "query": "make blocking python-arango calls in async MCP tools run off the event loop and return a standard error envelope",
+      "expected": ["arango-solutions-mcp-server_other_20260730_140225"]
+    },
+    {
+      "_key": "eq_cytoscape_overlay",
+      "category": "paraphrase",
+      "query": "overlay extra derived lineage edges on a Cytoscape canvas and highlight or dim a path without triggering a relayout",
+      "expected": ["project-sentinel_other_20260729_173241"]
+    },
+    {
+      "_key": "eq_synthetic_graph_data",
+      "category": "concept",
+      "query": "generate deterministic synthetic ArangoDB graph data for a demo, swapping real ARNs and account ids for fake ones",
+      "expected": ["iam_data-model_20260722_022906"]
+    },
+    {
+      "_key": "eq_lossy_schema_export",
+      "category": "paraphrase",
+      "query": "schema export renames data values into lossy labels, need aliases and a type discriminator with top-k sampling for transparency",
+      "expected": ["arango-schema-mapper_data-model_20260716_171339"]
     }
   ]
 }
