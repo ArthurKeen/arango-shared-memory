@@ -116,7 +116,10 @@ FOR c IN cand
   LET imp = (c.p.importance == null ? 5 : c.p.importance) / 10.0
   LET rec = POW(0.995, DATE_DIFF(c.p.last_used == null ? c.p.created_at : c.p.last_used, DATE_NOW(), "d"))
   LET use = LOG(1 + (c.p.usage_count == null ? 0 : c.p.usage_count)) / LOG(11)
-  LET score = rel * (1 + 0.15*imp + 0.10*rec + 0.05*use)
+  LET aw  = c.p.applied_worked == null ? 0 : c.p.applied_worked
+  LET af  = c.p.applied_failed == null ? 0 : c.p.applied_failed
+  LET succ = (aw + af) == 0 ? 1 : aw / (aw + af)
+  LET score = rel * (1 + 0.15*imp + 0.10*rec + 0.05*use) * (0.6 + 0.4*succ)
   SORT score DESC LIMIT @lim
   RETURN c.p._key
 """
@@ -142,7 +145,10 @@ FOR f IN fused
   LET imp = (p.importance == null ? 5 : p.importance) / 10.0
   LET rec = POW(0.995, DATE_DIFF(p.last_used == null ? p.created_at : p.last_used, DATE_NOW(), "d"))
   LET use = LOG(1 + (p.usage_count == null ? 0 : p.usage_count)) / LOG(11)
-  LET score = rel * (1 + 0.15*imp + 0.10*rec + 0.05*use)
+  LET aw  = p.applied_worked == null ? 0 : p.applied_worked
+  LET af  = p.applied_failed == null ? 0 : p.applied_failed
+  LET succ = (aw + af) == 0 ? 1 : aw / (aw + af)
+  LET score = rel * (1 + 0.15*imp + 0.10*rec + 0.05*use) * (0.6 + 0.4*succ)
   SORT score DESC LIMIT @lim
   RETURN p._key
 """
@@ -174,7 +180,10 @@ FOR f IN fused
   LET imp = (p.importance == null ? 5 : p.importance) / 10.0
   LET rec = POW(0.995, DATE_DIFF(p.last_used == null ? p.created_at : p.last_used, DATE_NOW(), "d"))
   LET use = LOG(1 + (p.usage_count == null ? 0 : p.usage_count)) / LOG(11)
-  LET score = rel * (1 + 0.15*imp + 0.10*rec + 0.05*use)
+  LET aw  = p.applied_worked == null ? 0 : p.applied_worked
+  LET af  = p.applied_failed == null ? 0 : p.applied_failed
+  LET succ = (aw + af) == 0 ? 1 : aw / (aw + af)
+  LET score = rel * (1 + 0.15*imp + 0.10*rec + 0.05*use) * (0.6 + 0.4*succ)
   SORT score DESC LIMIT @lim
   RETURN p._key
 """
