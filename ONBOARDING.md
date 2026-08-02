@@ -12,8 +12,15 @@ everyone. This gets you connected in ~10 minutes. In every project you opt in yo
   silent divergence.
 - **Automatic session digest** — every session starts with your project's open gaps, PRD
   staleness, feedback memories, and top relevant patterns injected for you.
+- **Automatic capture candidates** — at session end, a hook mines the transcript for likely
+  lessons (a command that failed then succeeded; corrections you gave) and queues them; the next
+  session's digest nags until you triage with `/pattern-save` (save the real ones, discard noise).
 - **A drift stop gate** — if you edited implementation files (or the PRD) and didn't run
   `/prd-sync`, session end is blocked once with instructions (bypass: `.no-drift-gate` file).
+
+Everything you save, search, or apply is **attributed to your username** — that's why you get your
+own account instead of a shared one. Contribution and reuse are visible per person (and yes, that
+means your saved patterns get credited to you when teammates reuse them).
 
 Retrieval is hybrid (semantic + keyword) with a graph of related patterns — you don't need to know
 that to use it. `setup.md` is the deep reference + troubleshooting; this is the happy path.
@@ -94,7 +101,10 @@ them from the backup after the re-run.
 
 ## 6. Use it
 - Starting a non-trivial problem? **`/pattern-search "<what you're stuck on>"`** first.
+- Applied one of the results? The skill records it (`pattern-applied`) — that's what makes good
+  patterns rank higher and gives the author credit. Don't skip it.
 - Solved something reusable? **`/pattern-save`**.
+- Digest says capture candidates are queued? Triage them with **`/pattern-save`** (2 minutes).
 - Touched implementation files? **`/prd-sync`** at session end (the hook reminds you).
 
 ---

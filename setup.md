@@ -12,16 +12,27 @@ This system gives Claude Code (and Cursor) three capabilities across all your pr
 2. **Shared memory with a taxonomy** (`/pattern-search`, `/pattern-save`) — before solving a
    non-trivial problem, search verified solutions from *any* project; after solving something
    reusable, save it. Memory types: `pattern`, `feedback` (with why + how_to_apply), `user`,
-   `project`, `reference`. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused,
-   re-ranked by importance · recency · usage) with a **graph** layer whose edge weights learn from
-   observed co-application — all executed server-side, so agents pass text and get ranked results.
-3. **Automatic recall** — a SessionStart hook injects a per-project digest at session start: open
-   drift gaps, last sync, PRD staleness (content hash vs the stored baseline), the project's
-   feedback memories, and the top-ranked relevant patterns. Fail-open: an unreachable database
-   never breaks a session.
-4. **Project registry + read-path analytics** — `project_registry` tracks each project (including
-   `prd_sha256`); `search_log` records every search (query, hit, project) so reuse is measurable,
-   not assumed.
+   `project`, `reference`. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused;
+   relevance is then multiplicatively boosted by importance · recency · usage and a learned
+   per-pattern **success rate** from recorded apply outcomes — salience modulates relevance,
+   never substitutes for it) with a **graph** layer whose edge weights learn from observed
+   co-application — all executed server-side, so agents pass text and get ranked results.
+   Applying a surfaced pattern is recorded via the `pattern-applied` tool (with an optional
+   worked/failed outcome), which feeds both ranking and the reuse funnel. Ranking is
+   **eval-backed**: a golden query set + `scripts/eval_retrieval.py` measure recall@k/MRR per
+   mode (see "Retrieval evaluation" below).
+3. **Automatic recall + capture** — a SessionStart hook injects a per-project digest at session
+   start: open drift gaps, last sync, PRD staleness (content hash vs the stored baseline), the
+   project's feedback memories, and the top-ranked relevant patterns. At session end a Stop hook
+   mines the transcript for **candidate memories** (a command that failed then later succeeded;
+   user corrections) into `.pattern-capture-queue/` — the next digest nags until `/pattern-save`
+   triages them (LLM judgment saves the real lessons, deletes the noise; the hook itself never
+   writes to shared memory). Fail-open: an unreachable database never breaks a session.
+4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
+   project (including `prd_sha256`); `search_log` records every search (query, hit, project,
+   **who**); every write is stamped with its author (`saved_by`, `detected_by`/`closed_by`, a
+   capped `apply_log` of who applied what) from the developer's own scoped DB account — so reuse
+   and contribution are measurable per person, not assumed.
 
 All skills degrade gracefully when ArangoDB / the MCP is unreachable, and fall back to keyword-only
 (BM25) when embeddings aren't configured.
@@ -189,6 +200,22 @@ scripts/install_maintenance_schedule.sh --uninstall
 ```
 On non-macOS it prints the crontab line to add. Log: `~/.arango-shared-memory/maintain.log`.
 
+**Retrieval evaluation (the golden set)** — ranking quality is measured, never assumed. The golden
+set lives in `eval/golden_queries.json` (developer-phrased queries → the pattern key(s) that should
+surface, tagged `paraphrase` / `keyword` / `cross-project`); `scripts/eval_retrieval.py` syncs it
+into `eval_queries` and scores every retrieval mode side-effect-free (its AQL mirrors the server's
+but never logs to `search_log` or bumps `surfaced_count`):
+```bash
+poetry run python ~/code/arango-shared-memory/scripts/eval_retrieval.py            # sync + evaluate
+poetry run python ~/code/arango-shared-memory/scripts/eval_retrieval.py --run-only # skip the sync
+```
+It prints recall@1/3/5, MRR, and per-category breakdowns for `bm25`, `hybrid`, and `hybrid+graph`,
+and appends each run to `eval_runs` so quality is trendable. **Run it after any change to the
+ranking AQL or scoring weights** (keep the server AQL and the eval AQL in sync — the file headers
+say so on both ends), and grow the golden set as important patterns are saved. This harness caught
+a real regression on its first run: the old additive salience scoring buried exact matches
+(hybrid MRR 0.25 vs BM25 0.93); multiplicative scoring + RRF k=10 lifted hybrid to MRR 0.975.
+
 ---
 
 ## Shared deployment (team) — local → shared ArangoDB
@@ -215,9 +242,13 @@ round-trip) worked over TLS with real auth on the first try. Two remote-only got
   (`phase1b_setup.py` should be given a longer timeout / retry when pointed at a shared cluster.)
 
 ### Provisioning teammates (per-developer users)
-Give each developer **their own** least-privilege user — better attribution ("who did what"),
-clean offboarding, and no shared password to rotate. The admin runs (root creds resolved from their
-own MCP config):
+Give each developer **their own** least-privilege user — attribution, clean offboarding, and no
+shared password to rotate. The connection identity IS the attribution: the server stamps every
+write with the connected username (`saved_by` on memories, `detected_by`/`closed_by` on drift
+alerts, `by` on searches, a capped `apply_log` of who applied each pattern), so per-developer
+scorecards fall straight out of the data. Docs written before attribution shipped were backfilled
+and carry `attribution_backfilled: true` to stay distinguishable from organic stamps. The admin
+runs (root creds resolved from their own MCP config):
 ```bash
 poetry run python scripts/add_teammate.py <username>          # create: rw on `memory` only, prints creds once
 poetry run python scripts/add_teammate.py <username> --revoke # offboard: deactivate + revoke

@@ -10,14 +10,21 @@ cross-project capabilities, backed by ArangoDB:
    (`check_evidence.py`) before it is persisted.
 2. **Shared memory with a taxonomy** (`/pattern-search`, `/pattern-save`) — a `shared_patterns`
    store of verified solutions plus `feedback` / `user` / `project` / `reference` memories,
-   usable from any project. Retrieval is **hybrid** (semantic vector + BM25 keyword, fused and
-   re-ranked) with a **graph** layer whose edge weights learn from real co-application.
-3. **Automatic recall + enforcement** — a SessionStart hook injects a per-project digest (open
-   gaps, PRD staleness, feedback memories, top patterns); a PostToolUse hook queues drift markers
-   (code *and* PRD edits); a Stop gate blocks session end (once) while the queue is non-empty.
-4. **Project registry + read-path analytics** — `project_registry` tracks each project's state
-   (including the PRD content hash); `search_log` records every search so you can measure whether
-   memory is actually being *reused*.
+   usable from any project. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused,
+   relevance multiplicatively boosted by importance/recency/usage and a learned per-pattern
+   success rate) with a **graph** layer whose edge weights learn from real co-application.
+   Ranking quality is **not assumed — it is measured** against a golden query set
+   (`scripts/eval_retrieval.py`; the harness caught a real regression on day one).
+3. **Automatic recall, capture, and enforcement** — a SessionStart hook injects a per-project
+   digest (open gaps, PRD staleness, feedback memories, top patterns); a PostToolUse hook queues
+   drift markers (code *and* PRD edits); a Stop hook mines the session transcript for **candidate
+   memories** (resolved failures, user corrections → `.pattern-capture-queue/`, triaged by
+   `/pattern-save`); a Stop gate blocks session end (once) while the drift queue is non-empty.
+4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
+   project's state (including the PRD content hash); `search_log` records every search; every
+   write is stamped with **who did it** (`saved_by` / `detected_by` / apply log, from each
+   developer's own scoped DB account) so reuse and contribution are measurable *per person*,
+   not assumed.
 
 The PRD for this system itself is [docs/PRD.md](docs/PRD.md) (yes, `/prd-sync` can audit this
 repo against it). The current change round is documented in
@@ -108,10 +115,17 @@ scripts/
   phase2_setup.py              Graph: similarity + provenance edges
   phase2b_extract.py           LLM-extracted edges (gpt-4o; periodic)
   phase3_lifecycle.py          Supersede / TTL / staleness (periodic)
+  eval_retrieval.py            Golden-set retrieval eval: recall@k / MRR per mode (bm25,
+                               hybrid, hybrid+graph); history in eval_runs. Run after any
+                               ranking change — the AQL mirrors the server's.
   verify.py                    Health check + adoption/read-path scorecard
+  add_teammate.py              Per-developer least-privilege users (also drives attribution)
+  install_visualizer.py        Graph Visualizer theme/queries/canvas actions for memory_graph
   bootstrap_project.sh         Scaffold a project from templates/
+eval/golden_queries.json       The golden query set (grow it as important patterns are saved)
 templates/                     Source of truth for CLAUDE.md, hooks (session recall, drift
-                               queue, stop gate), and the skills incl. check_evidence.py
+                               queue, capture miner, stop gate), and the skills incl.
+                               check_evidence.py
 tests/                         DB-free test suite: python3 -m unittest discover tests
 ```
 
