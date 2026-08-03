@@ -31,6 +31,11 @@ available yet (keyword-only) — still useful.
 
 If the `pattern-search` tool is unavailable, fall back to the appendix query.
 
+**Time travel (bi-temporal reads):** pass `as_of: "<ISO timestamp>"` to see the memories that were
+VALID at that moment — including ones since superseded ("what did we know then?"). Use it when
+auditing a past decision or comparing today's guidance with what a session would have retrieved
+last month. `as_of` reads are analytical: they are not logged to the reuse funnel.
+
 ### Phase 2 — Present results
 Show up to 5, highest `score` first:
 ```

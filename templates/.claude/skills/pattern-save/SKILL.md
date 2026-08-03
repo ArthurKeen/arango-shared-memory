@@ -12,6 +12,21 @@ Only save verified successes — never save speculative solutions.
 
 ## Protocol
 
+### Phase 0a — Triage the capture queue (when present)
+
+If `.pattern-capture-queue/` contains `*.json` files, the Stop hook mined candidate memories
+from earlier sessions (resolved command failures, user corrections). Before saving anything new,
+triage them — this is where LLM judgment enters; the hook deliberately has none:
+
+1. Read each queue file. For every candidate decide: **save** (a real, reusable lesson —
+   continue with the normal flow below; corrections usually become `feedback` memories with
+   why + how_to_apply), or **discard** (session-specific noise, transient env issues, or
+   something shared memory already has — check with /pattern-search first).
+2. Delete each queue file once its candidates are dispatched (`rm .pattern-capture-queue/<f>.json`).
+   Never leave triaged files behind; the SessionStart digest nags about them until gone.
+3. Quality bar is unchanged: only verified, reusable lessons get saved. An empty triage
+   (all discarded) is a perfectly good outcome.
+
 ### Phase 0 — Gather context
 
 First decide the **memory type** (infer from context; ask only if genuinely ambiguous):
@@ -38,27 +53,24 @@ Also rate **importance** 1–10 yourself (no need to ask): how broadly reusable 
 pattern? `1` = mundane/project-specific, `10` = a technique many projects will need. This drives
 ranking in `/pattern-search` (it replaced the old `worked`-only signal).
 
-### Phase 1 — Duplicate check
+### Phase 1 — Duplicate awareness (the server enforces it)
 
-```
-Use tool: execute-aql-query
-query: FOR p IN shared_patterns
-         FILTER p.problem_category == @cat AND p.project_type == @ptype
-         SORT p.created_at DESC LIMIT 5
-         RETURN { key: p._key, desc: p.problem_description, solution: p.solution_summary }
-bindVars: { cat: "<problem_category>", ptype: "<project_type>" }
-```
+The server enforces write-time consolidation, so a manual pre-check is optional. If you want
+early awareness, run `/pattern-search "<the problem>"` first — but the real gate is Phase 2:
+`save-pattern` refuses to insert when an existing **valid** memory is ≥0.80 cosine-similar and
+returns the candidates instead (`consolidation_required: true`). When that happens, DECIDE:
 
-If a pattern with >70% semantic overlap exists, present it and ask:
-- **Update** the existing one with new details
-- **Create** new (solution is meaningfully different)
-- **Skip** (essentially the same)
+- **Update** the existing memory (new details, same lesson): merge fields with `upsert-document`
+  — and if you changed `problem_description` or `solution_summary`, ALSO set
+  `"embedding_pending": true` in the same update so maintenance re-embeds it. Never leave an
+  edited memory with a stale vector.
+- **Replace** it (the old memory is now wrong/obsolete): re-call `save-pattern` with
+  `supersedes_key: "<candidate _key>"` — the old one is invalidated bi-temporally
+  (valid_to closed, demoted from ranking) and linked via `pattern_supersedes`. History is kept:
+  `pattern-search(as_of=...)` can still see what was believed before.
+- **Force** (genuinely different despite the similarity): re-call with `force: true`.
 
-**Update path:** merge the changed fields with `upsert-document` — and if you changed
-`problem_description` or `solution_summary`, ALSO set `"embedding_pending": true` in the same
-update. The stored embedding no longer matches the text; the pending flag makes the next
-maintenance pass (`scripts/maintain.py` / `phase1b_setup.py`) re-embed it. Never leave an edited
-memory with a stale vector.
+Tell the user which you chose and why — that judgment is the whole point of the gate.
 
 ### Phase 2 — Write pattern (embed-THEN-insert, single tool)
 
@@ -74,33 +86,31 @@ solution_summary:    "<2-5 sentences>"
 problem_category:    "<category>"
 project_id:          "<PROJECT_ID from AGENTS.md>"
 project_type:        "<project_type from AGENTS.md>"
+memory_type:         "<pattern|feedback|user|project|reference>"
+why:                 "<feedback only: the reason behind the guidance>"
+how_to_apply:        "<feedback only: how to apply it next time>"
 tags:                ["<tag1>", "<tag2>"]
 importance:          <1-10>
 source_file:         "<relevant file:line if applicable>"
 ```
+The taxonomy is stamped server-side — do NOT do a separate post-save merge for
+`memory_type`/`why`/`how_to_apply` (the old Phase 2b; it was routinely skipped and left
+memories typeless). Omit `why`/`how_to_apply` for non-`feedback` types.
+
+If the response is `consolidation_required: true`, go back to Phase 1 and decide
+(update / supersedes_key / force) — nothing was saved yet.
 Returns `{ _key, embedded, relates_edges, superseded }`. The tool sets `usage_count=0`,
 `last_used=created_at`, and a timestamped `_key` automatically. `importance` / `usage_count` /
 `last_used` feed the `/pattern-search` graded scoring; `/pattern-search` bumps `usage_count` and
 refreshes `last_used` when a pattern is applied.
 
-**Phase 2b — attach the taxonomy fields.** Immediately after `save-pattern` returns, merge the
-memory-type metadata onto the new document (one call; `save-pattern` may not pass unknown fields
-through, and a merge on an existing doc does not touch the embedding, so this is always safe):
-```
-Use tool: upsert-document
-collection_name: "shared_patterns"
-search_fields: { "_key": "<the _key save-pattern returned>" }
-document_data: { "_key": "<same>" }
-update_data: { "memory_type": "<pattern|feedback|user|project|reference>",
-               "why": "<feedback only>", "how_to_apply": "<feedback only>" }
-```
-Omit `why`/`how_to_apply` for non-`feedback` types.
-
 - On success: `[PATTERN-SAVE] Saved <_key> (<memory_type>, relates_edges=<n>).`
-- If it returns an error mentioning "embedding required": OPENAI_API_KEY is unset/unreachable and the
-  collection has a vector index — saving is blocked until embeddings are available. Report and stop.
+- On `consolidation_required: true`: nothing was saved — decide per Phase 1
+  (update / `supersedes_key` / `force`) and act.
+- If `embedding_pending: true` in the response: OpenAI was unreachable; the memory saved with a
+  deferred vector and is keyword-searchable now (maintenance re-embeds it). Nothing to do.
 - If `save-pattern` is unavailable (older server): fall back to the appendix insert flow, but note it
-  fails while the vector index is present.
+  fails while the vector index is present — and you must merge `memory_type` manually in that case.
 
 > LLM-derived edges (`pattern_addresses_requirement`, `requirement_depends_on`) are NOT built per-save
 > — they run as a periodic batch via `scripts/phase2b_extract.py`.

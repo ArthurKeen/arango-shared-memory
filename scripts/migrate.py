@@ -17,6 +17,8 @@ Migrations:
   m003_memory_type   backfill memory_type="pattern" on typeless memories
   m004_edge_weights  backfill co_applied=0 and weight=sim on pattern_relates_to
   m005_validation    attach JSON schema validation (level moderate)
+  m006_temporal      backfill bi-temporal validity (valid_from = created_at;
+                     superseded docs closed at their superseder's created_at)
 
 Usage (via the MCP server's Poetry env):
     cd ~/code/arango-solutions-mcp-server
@@ -171,6 +173,43 @@ def apply_validation(db):
             ensure_schema(db, coll, schema)
 
 
+# --- m006: bi-temporal validity --------------------------------------------
+
+def detect_temporal(db):
+    if not db.has_collection("shared_patterns"):
+        return False
+    n = next(iter(db.aql.execute(
+        "RETURN LENGTH(FOR p IN shared_patterns FILTER p.valid_from == null RETURN 1)")))
+    return n > 0
+
+
+def apply_temporal(db):
+    """Backfill validity intervals: valid_from = created_at (memories were valid
+    from the moment they were saved); superseded memories get their interval
+    closed at the SUPERSEDER's creation time — the best available record of when
+    the old knowledge stopped being current — and invalidated_by from the
+    existing superseded_by pointer. Live memories keep valid_to = null."""
+    n_open = len(list(db.aql.execute("""
+        FOR p IN shared_patterns
+          FILTER p.valid_from == null AND p.superseded != true
+          UPDATE p WITH { valid_from: p.created_at, valid_to: null } IN shared_patterns
+          RETURN 1""")))
+    n_closed = len(list(db.aql.execute("""
+        FOR p IN shared_patterns
+          FILTER p.valid_from == null AND p.superseded == true
+          LET succ = p.superseded_by == null ? null
+                     : DOCUMENT("shared_patterns", p.superseded_by)
+          UPDATE p WITH {
+            valid_from: p.created_at,
+            valid_to: succ != null ? succ.created_at : p.created_at,
+            invalidated_by: p.superseded_by,
+            invalidation_reason: p.invalidation_reason != null
+                ? p.invalidation_reason : "superseded (pre-temporal backfill)"
+          } IN shared_patterns
+          RETURN 1""")))
+    print(f"  valid_from/valid_to backfilled: {n_open} live + {n_closed} superseded document(s)")
+
+
 MIGRATIONS = [
     ("m001_collections", "collections + indexes added since the first release",
      detect_collections, apply_collections),
@@ -182,6 +221,8 @@ MIGRATIONS = [
      detect_edge_weights, apply_edge_weights),
     ("m005_validation", "attach JSON schema validation (moderate)",
      detect_validation, apply_validation),
+    ("m006_temporal", "backfill bi-temporal validity (valid_from/valid_to/invalidated_by)",
+     detect_temporal, apply_temporal),
 ]
 
 
