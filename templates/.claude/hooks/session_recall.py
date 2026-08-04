@@ -128,7 +128,7 @@ def main() -> int:
           FILTER p.project_id == @pid AND p.memory_type == "feedback"
                  AND p.superseded != true
           SORT p.importance DESC, p.created_at DESC LIMIT 5
-          RETURN {desc: p.problem_description, how: p.how_to_apply}""",
+          RETURN {"desc": p.problem_description, "how": p.how_to_apply}""",
                    {"pid": pid}, insecure)
 
     top = aql(host, db, auth, """
@@ -142,7 +142,7 @@ def main() -> int:
                       + LOG(1 + (p.usage_count == null ? 0 : p.usage_count)) / LOG(11)
           SORT score DESC LIMIT 5
           RETURN {key: p._key, cat: p.problem_category, type: p.memory_type,
-                  desc: p.problem_description}""",
+                  "desc": p.problem_description}""",
               {"pid": pid, "ptype": cfg.get("project_type", "other")}, insecure)
 
     lines = [f"[SHARED-MEMORY] Session digest for project '{pid}':"]
