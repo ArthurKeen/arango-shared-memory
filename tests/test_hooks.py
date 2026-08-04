@@ -174,6 +174,28 @@ class TestSessionRecallParsing(unittest.TestCase):
         self.assertEqual(self.mod.parse_claude_md(
             os.path.join(self.dir.name, "nope.md")), {})
 
+    def test_markdown_decorated_values_parse(self):
+        """Humans format these docs: `id`, **id**, "id".
+
+        A real project (arango-sparql-py) wrapped every identity value in
+        backticks; the old [A-Za-z0-9._-]+ pattern could not match it, so
+        project_id came back empty and the ENTIRE digest returned early — silent,
+        indistinguishable from "nothing to report" (same failure mode as the
+        reserved-keyword bug in PR #1).
+        """
+        path = self._write("- PROJECT_ID: `arango-sparql-py`\n"
+                           "- PROJECT_TYPE: **microservice**\n"
+                           '- PRD_FILE: "docs/architecture/PRD.md"\n')
+        cfg = self.mod.parse_claude_md(path)
+        self.assertEqual(cfg["project_id"], "arango-sparql-py")
+        self.assertEqual(cfg["project_type"], "microservice")
+        self.assertEqual(cfg["prd_file"], "docs/architecture/PRD.md")
+
+    def test_decorated_placeholders_are_still_skipped(self):
+        """Stripping decoration must not let a placeholder through."""
+        path = self._write("- PROJECT_ID: `<unique-kebab-case-id>`\n")
+        self.assertNotIn("project_id", self.mod.parse_claude_md(path))
+
     def test_agents_md_is_preferred_over_claude_md(self):
         # AGENTS.md (the consolidated canonical doc) wins when both exist; a stale
         # CLAUDE.md left over from the migration must not shadow it.

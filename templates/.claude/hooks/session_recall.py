@@ -38,8 +38,11 @@ def parse_claude_md(path=None):
     concrete (non-placeholder) value. An explicit ``path`` reads only that file.
     """
     paths = [path] if path is not None else ["AGENTS.md", "CLAUDE.md"]
-    fields = (("project_id", r"PROJECT_ID:\s*([A-Za-z0-9._-]+)"),
-              ("project_type", r"PROJECT_TYPE:\s*([A-Za-z0-9._-]+)"),
+    # Values may be wrapped in markdown emphasis (`id`, **id**, "id") — humans
+    # format these docs. Capture permissively, then strip the decoration, so a
+    # backtick-quoted PROJECT_ID doesn't silently disable the whole digest.
+    fields = (("project_id", r"PROJECT_ID:\s*(\S+)"),
+              ("project_type", r"PROJECT_TYPE:\s*(\S+)"),
               ("prd_file", r"PRD_FILE:\s*(\S+)"))
     out = {}
     for p in paths:
@@ -52,8 +55,11 @@ def parse_claude_md(path=None):
             if key in out:
                 continue
             m = re.search(pat, text)
-            if m and not m.group(1).startswith("<"):
-                out[key] = m.group(1)
+            if not m:
+                continue
+            value = m.group(1).strip("`*_\"' ")
+            if value and not value.startswith("<"):
+                out[key] = value
         if len(out) == len(fields):
             break
     return out
@@ -100,11 +106,35 @@ def sha256_file(path):
         return None
 
 
+def capture_queue_notice():
+    """Surface queued capture candidates (mined by the Stop hook from earlier
+    sessions). Printed BEFORE any network call so the nudge survives an
+    unreachable database — reviewing candidates needs no connectivity."""
+    try:
+        files = [f for f in os.listdir(".pattern-capture-queue") if f.endswith(".json")]
+        if not files:
+            return
+        n = 0
+        for f in files:
+            try:
+                with open(os.path.join(".pattern-capture-queue", f), encoding="utf-8") as fh:
+                    n += len(json.load(fh).get("candidates", []))
+            except Exception:  # noqa: BLE001
+                n += 1  # unreadable file still deserves review
+        print(f"[SHARED-MEMORY] {n} candidate memorie(s) mined from {len(files)} earlier "
+              f"session(s) await review — run /pattern-save to triage "
+              f"(.pattern-capture-queue/; save the real lessons, delete the noise).")
+    except OSError:
+        pass
+
+
 def main() -> int:
     cfg = parse_claude_md()
     pid = cfg.get("project_id")
     if not pid:
         return 0  # not a bootstrapped project (or placeholders unrendered)
+
+    capture_queue_notice()
 
     host = resolve("ARANGO_HOSTS", "http://localhost:8539").split(",")[0].strip()
     db = resolve("ARANGO_DEFAULT_DB_NAME", "memory")

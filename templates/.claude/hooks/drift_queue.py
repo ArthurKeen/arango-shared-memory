@@ -32,8 +32,12 @@ def prd_file_from_claude_md(path=None):
                 m = re.search(r"PRD_FILE:\s*(\S+)", fh.read())
         except OSError:
             continue
-        if m and not m.group(1).startswith("<"):
-            return m.group(1)
+        # Strip markdown decoration (`path`, **path**) — a backtick-wrapped value
+        # would never match a real edited path, silently disabling PRD-edit markers.
+        if m:
+            value = m.group(1).strip("`*_\"' ")
+            if value and not value.startswith("<"):
+                return value
     return None
 
 
