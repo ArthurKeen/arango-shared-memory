@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse hook (Write|Edit) — queue drift markers for /prd-sync.
+"""PostToolUse hook (Write|Edit|MultiEdit|NotebookEdit) — queue drift markers for /prd-sync.
 
 Reads the hook payload from stdin. Two triggers:
   - an implementation file was edited  -> marker  <epoch>_<basename>
@@ -47,7 +47,9 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         return 0
     tool_input = payload.get("tool_input", payload) or {}
-    file_path = tool_input.get("file_path") or tool_input.get("path") or ""
+    # Write/Edit/MultiEdit use file_path; NotebookEdit uses notebook_path.
+    file_path = (tool_input.get("file_path") or tool_input.get("path")
+                 or tool_input.get("notebook_path") or "")
     if not file_path:
         return 0
 

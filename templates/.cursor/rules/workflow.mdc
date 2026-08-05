@@ -37,3 +37,6 @@ alwaysApply: true
 
 > Note: Cursor does not run the Claude Code hooks in `.claude/` (session digest, drift
 > queue, stop gate) — in Cursor these rules are the enforcement layer, so follow them.
+> (Cursor's own `hooks.json` — afterFileEdit / stop / beforeSubmitPrompt — could enforce
+> these mechanically like the Claude hooks do; that is a tracked future enhancement. Until
+> then, honor these rules.)

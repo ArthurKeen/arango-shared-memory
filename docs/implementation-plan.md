@@ -52,17 +52,27 @@ Planned migrations:
 4. `m004_edge_weights` — backfill `co_applied: 0` and `weight: sim` on `pattern_relates_to`.
 5. `m005_validation` — attach JSON schema validation (moderate) to the business collections.
 
+## Server-side changes — SHIPPED (separate MCP-server repository)
+
+These once-deferred server-side items are now implemented in `arango-solutions-mcp-server`
+(`mcp_tools/pattern_memory_tools.py`), so the client skills no longer need workarounds:
+
+- `pattern-search` **hard-excludes `superseded == true`** in all three ranking AQLs
+  (hybrid, hybrid+graph, BM25); the `as_of` time-travel view intentionally re-includes
+  what was valid at that instant.
+- `save-pattern` accepts **`memory_type` / `why` / `how_to_apply` as first-class inputs**
+  and stamps them server-side (the save skill no longer does a post-save merge).
+- `pattern-search` now takes an optional **`memory_type` filter parameter** (validated;
+  ANDed onto the validity filter in every mode).
+
 ## Out of scope here (tracked, not silently dropped)
 
-- **Server-side changes** (separate MCP-server repository): hard-excluding
-  `superseded == true` in the `pattern-search` tool, accepting
-  `memory_type`/`why`/`how_to_apply` as first-class `save-pattern` inputs, and a
-  `memory_type` filter parameter on search. Until then the save skill merges the
-  taxonomy fields immediately after `save-pattern` returns, and the fallback query
-  filters superseded docs — the system is correct either way, just with one extra call.
 - **Automated remediation of drift gaps** — deliberately excluded; §13 of the PRD defines
   the gates any future version must satisfy.
 - **Windows scheduler support** for maintenance (launchd + cron covered).
+- **Automatic `pattern-applied` capture** — reuse is still recorded by the agent per the
+  skill protocol (now MANDATORY in CLAUDE.md); a server/hook-driven capture is a candidate
+  if the surfaced→applied metric stays low.
 
 ## Verification
 

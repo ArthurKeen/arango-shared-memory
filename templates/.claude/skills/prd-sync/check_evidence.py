@@ -33,6 +33,10 @@ import sys
 # Classifications whose evidence must verify for the claim to stand.
 CHECKED = {"IMPLEMENTED", "OUTDATED-PRD", "TEST-ONLY"}
 _LINE_REF = re.compile(r"^(?P<path>.+?):(?P<start>\d+)(?:-(?P<end>\d+))?$")
+# Lines of slack around a cited range when checking that `term` appears there.
+# A cited term must be NEAR the cited line, not merely somewhere in the file —
+# otherwise the citation could point anywhere and still "verify".
+TERM_CONTEXT = 3
 
 
 def parse_evidence(item: str):
@@ -70,9 +74,18 @@ def check_evidence_item(item: str, term: str | None = None, root: str = "."):
             return "line_out_of_range", f"{path} has {len(lines)} lines, cited {start}" + (
                 f"-{end}" if end != start else "")
     if term:
-        blob = "".join(lines).lower()
+        # Line-local when a line is cited (term must be near it); whole-file only
+        # for a bare path with no line number.
+        if start is not None:
+            lo = max(0, start - 1 - TERM_CONTEXT)
+            hi = min(len(lines), end + TERM_CONTEXT)
+            blob = "".join(lines[lo:hi]).lower()
+            where = f"near line {start}" + (f"-{end}" if end != start else "")
+        else:
+            blob = "".join(lines).lower()
+            where = f"in {path}"
         if term.lower() not in blob:
-            return "term_not_found", f"{term!r} not found anywhere in {path}"
+            return "term_not_found", f"{term!r} not found {where}"
     return "verified", ""
 
 

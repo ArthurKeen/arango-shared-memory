@@ -6,8 +6,9 @@ Capture is the weakest link of the shared-memory loop: recall is automatic
 /pattern-save. This hook closes half that gap: at session end it scans the
 transcript for two cheap, high-signal moments and queues them as CANDIDATES —
 
-  - resolved failures: a Bash command that errored and a similar command that
-    later succeeded (a gotcha was likely solved in between);
+  - resolved failures: a tool call (a Bash command, or an MCP tool such as
+    execute-aql-query / pattern-search) that errored and a similar later call
+    that succeeded (a gotcha was likely solved in between);
   - user corrections: user messages that read like a correction or redirection
     (candidate `feedback` memories — the guidance should outlive this session).
 
@@ -46,7 +47,8 @@ CORRECTION_RE = re.compile(
 
 ERROR_MARKER_RE = re.compile(
     r"(?:Traceback \(most recent call last\)|command not found|No such file or directory"
-    r"|ERR \d{3,4}|\bfatal:|\berror\b[:\s]|Exception\b|FAILED\b|✗|401|403|500)",
+    r"|ERR \d{3,4}|\bfatal:|\berror\b[:\s]|\"error\"\s*:\s*\""  # MCP error envelope
+    r"|Exception\b|FAILED\b|✗|401|403|500)",
     re.IGNORECASE)
 
 
@@ -80,10 +82,25 @@ def _clean(text, limit=SNIPPET):
     return re.sub(r"\s+", " ", text or "").strip()[:limit]
 
 
+def _event_identity(name, command):
+    """A stable key + human label for a tool call, or (None, None) to skip.
+
+    Bash is keyed by the program that actually ran; MCP tools (hyphenated names
+    like execute-aql-query, pattern-search) by their tool name. Edit/Write/Read
+    and other benign-churn tools are skipped — a fail→success there rarely means
+    a gotcha was solved, and false positives waste reviewer attention.
+    """
+    if name == "Bash":
+        return _last_segment_head(command), _clean(command, 160)
+    if name and "-" in name:   # MCP tool
+        return name, name
+    return None, None
+
+
 def mine(transcript_path):
     """Return (candidates, tool_call_count) mined from a Claude Code JSONL transcript."""
     tool_use = {}          # id -> {"name","command"}
-    bash_events = []       # ordered: {"program","command","ok"}
+    tool_events = []       # ordered: {"key","label","ok"} across Bash + MCP tools
     corrections = []
 
     with open(transcript_path, encoding="utf-8") as fh:
@@ -111,15 +128,15 @@ def mine(transcript_path):
                             continue
                         if block.get("type") == "tool_result":
                             tu = tool_use.get(block.get("tool_use_id"))
-                            if not tu or tu.get("name") != "Bash":
+                            if not tu:
+                                continue
+                            key, label = _event_identity(tu.get("name"), tu.get("command"))
+                            if not key:
                                 continue
                             out = _text_of(block.get("content"))
                             failed = bool(block.get("is_error")) or bool(
                                 ERROR_MARKER_RE.search(out[:2000]))
-                            bash_events.append({
-                                "program": _last_segment_head(tu.get("command")),
-                                "command": _clean(tu.get("command"), 160),
-                                "ok": not failed})
+                            tool_events.append({"key": key, "label": label, "ok": not failed})
                         elif block.get("type") == "text":
                             plain.append(block.get("text") or "")
                     text = "\n".join(plain)
@@ -133,19 +150,19 @@ def mine(transcript_path):
                     if CORRECTION_RE.search(text[:400]):
                         corrections.append(_clean(text))
 
-    # resolved failures: program failed, then the same program later succeeded
+    # resolved failures: a tool (by key) failed, then the same key later succeeded
     candidates, seen = [], set()
-    for i, ev in enumerate(bash_events):
-        if ev["ok"] or not ev["program"] or ev["program"] in seen:
+    for i, ev in enumerate(tool_events):
+        if ev["ok"] or not ev["key"] or ev["key"] in seen:
             continue
-        for later in bash_events[i + 1:]:
-            if later["program"] == ev["program"] and later["ok"]:
-                seen.add(ev["program"])
+        for later in tool_events[i + 1:]:
+            if later["key"] == ev["key"] and later["ok"]:
+                seen.add(ev["key"])
                 candidates.append({
                     "kind": "resolved-failure",
-                    "summary": f"'{ev['program']}' failed and later succeeded — "
+                    "summary": f"'{ev['key']}' failed and later succeeded — "
                                "a gotcha was likely solved in between",
-                    "evidence": {"failed": ev["command"], "succeeded": later["command"]}})
+                    "evidence": {"failed": ev["label"], "succeeded": later["label"]}})
                 break
 
     for c in corrections[:4]:
@@ -153,7 +170,7 @@ def mine(transcript_path):
                            "summary": "user correction/redirection — candidate feedback memory",
                            "evidence": {"message": c}})
 
-    return candidates[:MAX_CANDIDATES], len(bash_events)
+    return candidates[:MAX_CANDIDATES], len(tool_events)
 
 
 def main() -> int:

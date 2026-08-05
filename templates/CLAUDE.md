@@ -22,7 +22,9 @@ This project uses autonomous drift detection with enforcement. Registered automa
   `/prd-sync` to clear it. Bypass only via a `.no-drift-gate` file (discouraged).
 
 **Mandatory protocol:**
-1. Before solving any non-trivial problem: run `/pattern-search <description>` first.
+1. Before solving any non-trivial problem: run `/pattern-search <description>` first. If you apply
+   any surfaced pattern, immediately record it with `pattern-applied` (the reuse signal is how good
+   patterns rise and their authors get credit — do not defer it to session end).
 2. After fixing a drift gap or discovering a reusable technique: run `/pattern-save`.
 3. When the user corrects you or confirms an approach worked: save it as a `feedback`
    memory (with why + how_to_apply) so the guidance persists across sessions.

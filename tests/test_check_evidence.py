@@ -72,6 +72,19 @@ class TestCheckEvidenceItem(unittest.TestCase):
         v, _ = ce.check_evidence_item("mod.py:1", term="oauth", root=self.dir.name)
         self.assertEqual(v, "term_not_found")
 
+    def test_term_must_be_near_cited_line(self):
+        # Term present in the file but far from the cited line → not verified
+        # (line-local search), while a bare path (no line) still matches file-wide.
+        path = os.path.join(self.dir.name, "far.py")
+        with open(path, "w") as fh:
+            fh.write("jwt on line one\n" + "filler\n" * 20 + "tail\n")
+        v, _ = ce.check_evidence_item("far.py:20", term="jwt", root=self.dir.name)
+        self.assertEqual(v, "term_not_found")
+        v, _ = ce.check_evidence_item("far.py:1", term="jwt", root=self.dir.name)
+        self.assertEqual(v, "verified")
+        v, _ = ce.check_evidence_item("far.py", term="jwt", root=self.dir.name)
+        self.assertEqual(v, "verified")
+
 
 class TestCheckClaim(unittest.TestCase):
     def setUp(self):

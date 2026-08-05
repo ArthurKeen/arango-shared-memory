@@ -80,7 +80,16 @@ def main() -> int:
           f"{'  [DRY RUN]' if DRY_RUN else ''}")
 
     # --- 1. SUPERSEDE near-duplicates ---
-    if SUP not in {e["edge_collection"] for e in db.graph(GRAPH).edge_definitions()} and not DRY_RUN:
+    # The graph may not exist yet (phase2 never ran). Ensure it before touching
+    # edge definitions, so this pass self-heals instead of crashing.
+    if not db.has_graph(GRAPH):
+        if DRY_RUN:
+            print(f"  supersede: graph {GRAPH!r} absent — would create it")
+        else:
+            db.create_graph(GRAPH)
+    existing_edges = ({e["edge_collection"] for e in db.graph(GRAPH).edge_definitions()}
+                      if db.has_graph(GRAPH) else set())
+    if SUP not in existing_edges and not DRY_RUN:
         db.graph(GRAPH).create_edge_definition(
             edge_collection=SUP, from_vertex_collections=["shared_patterns"],
             to_vertex_collections=["shared_patterns"])

@@ -17,7 +17,7 @@ usage). You pass text and get ranked results — no embeddings or AQL in the age
 
 ### Phase 1 — Search
 Call the server-side tool with the raw problem description. Pass `project_id` (from
-CLAUDE.md) so the read is logged for per-project analytics:
+AGENTS.md/CLAUDE.md) so the read is logged for per-project analytics:
 ```
 Use tool: pattern-search
 query_text: "<the full problem description>"
@@ -57,10 +57,11 @@ Apply any of these to the current problem? [1/2/.../none]
 Summarize how to adapt the selected pattern; note framework/data-model/constraint differences —
 never blindly copy.
 
-### Phase 4 — Reinforce on use (IMPORTANT — closes the feedback loop)
-If you actually **apply** one or more of the surfaced patterns to solve the problem, record it
-with a single tool call (this is the APPLY side of the read-path funnel — search records what was
-*surfaced*, this records what was *reused*, and it feeds ranking so useful patterns rise over time):
+### Phase 4 — Reinforce on use (MANDATORY when you reuse a pattern — closes the feedback loop)
+If you actually **apply** one or more of the surfaced patterns to solve the problem, you MUST record
+it with a single tool call (this is the APPLY side of the read-path funnel — search records what was
+*surfaced*, this records what was *reused*, and it feeds ranking so useful patterns rise over time,
+and the author gets credit). Skipping it is the #1 reason the surfaced→applied metric under-reports:
 ```
 Use tool: pattern-applied
 keys: ["<applied pattern _key>", "..."]

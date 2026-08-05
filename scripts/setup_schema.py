@@ -6,14 +6,18 @@ Creates three document collections and two persistent indexes:
   - project_registry
   - drift_alerts      (idx: project_id, status, detected_at)
 
-Connection settings are read from the same environment variables the
-arango-solutions-mcp-server uses, so a single configuration works for both:
+Connection settings use the same three-tier resolution as every other script
+(env -> the `arangodb-memory-mcp` MCP config -> defaults), so one configuration
+serves the MCP server, the scripts, and the hooks (REQ-131):
 
-  ARANGO_HOSTS          default: http://localhost:8529  (comma-separated allowed)
+  ARANGO_HOSTS          default: http://localhost:8539  (comma-separated allowed)
   ARANGO_ROOT_USERNAME  default: root
   ARANGO_ROOT_PASSWORD  default: ""  (empty)
-  ARANGO_DEFAULT_DB_NAME default: _system
+  ARANGO_DEFAULT_DB_NAME default: memory
   ARANGO_VERIFY_SSL     default: true   (set "false" to disable verification)
+
+This is an ADMIN path: it connects to _system to create the target database, so
+it needs admin credentials (teammates joining an existing memory never run it).
 
 Usage:
     python scripts/setup_schema.py
@@ -26,6 +30,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -40,6 +45,26 @@ except ModuleNotFoundError:
         "~/code/arango-shared-memory/scripts/setup_schema.py\n"
     )
     sys.exit(2)
+
+
+SERVER_ID = "arangodb-memory-mcp"
+
+
+def _from_mcp_config(key: str):
+    for path in ["~/.cursor/mcp.json", "~/.claude.json"]:
+        p = os.path.expanduser(path)
+        if os.path.exists(p):
+            try:
+                env = json.load(open(p))["mcpServers"][SERVER_ID]["env"]
+                if key in env:
+                    return env[key]
+            except (KeyError, ValueError, OSError):
+                pass
+    return None
+
+
+def resolve(key: str, default: str = "") -> str:
+    return os.environ.get(key) or _from_mcp_config(key) or default
 
 
 # search_log: read-path instrumentation — one doc per /pattern-search call
@@ -175,23 +200,16 @@ SCHEMAS = {
 }
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in ("0", "false", "no", "off", "")
-
-
 def connect():
     hosts = [
         h.strip()
-        for h in os.environ.get("ARANGO_HOSTS", "http://localhost:8529").split(",")
+        for h in resolve("ARANGO_HOSTS", "http://localhost:8539").split(",")
         if h.strip()
     ]
-    username = os.environ.get("ARANGO_ROOT_USERNAME", "root")
-    password = os.environ.get("ARANGO_ROOT_PASSWORD", "")
-    db_name = os.environ.get("ARANGO_DEFAULT_DB_NAME", "_system")
-    verify = _env_bool("ARANGO_VERIFY_SSL", True)
+    username = resolve("ARANGO_ROOT_USERNAME", "root")
+    password = resolve("ARANGO_ROOT_PASSWORD", "")
+    db_name = resolve("ARANGO_DEFAULT_DB_NAME", "memory")
+    verify = resolve("ARANGO_VERIFY_SSL", "true").lower() not in ("0", "false", "no", "off", "")
 
     print(f"Connecting to {hosts} as {username!r}, target database {db_name!r} ...")
     client = ArangoClient(hosts=hosts, verify_override=verify)

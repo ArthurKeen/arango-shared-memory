@@ -10,16 +10,17 @@ cross-project capabilities, backed by ArangoDB:
    (`check_evidence.py`) before it is persisted.
 2. **Shared memory with a taxonomy** (`/pattern-search`, `/pattern-save`) — a `shared_patterns`
    store of verified solutions plus `feedback` / `user` / `project` / `reference` memories,
-   usable from any project. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused,
+   usable from any project and filterable by `memory_type`. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused,
    relevance multiplicatively boosted by importance/recency/usage and a learned per-pattern
    success rate) with a **graph** layer whose edge weights learn from real co-application.
    Ranking quality is **not assumed — it is measured** against a golden query set
    (`scripts/eval_retrieval.py`; the harness caught a real regression on day one).
 3. **Automatic recall, capture, and enforcement** — a SessionStart hook injects a per-project
    digest (open gaps, PRD staleness, feedback memories, top patterns); a PostToolUse hook queues
-   drift markers (code *and* PRD edits); a Stop hook mines the session transcript for **candidate
-   memories** (resolved failures, user corrections → `.pattern-capture-queue/`, triaged by
-   `/pattern-save`); a Stop gate blocks session end (once) while the drift queue is non-empty.
+   drift markers (code *and* PRD edits, incl. MultiEdit/NotebookEdit); a Stop hook mines the
+   session transcript for **candidate memories** (resolved tool failures — Bash or MCP — and user
+   corrections → `.pattern-capture-queue/`, triaged by `/pattern-save`); a Stop gate blocks session
+   end (once) while the drift queue is non-empty.
 4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
    project's state (including the PRD content hash); `search_log` records every search; every
    write is stamped with **who did it** (`saved_by` / `detected_by` / apply log, from each
@@ -28,7 +29,8 @@ cross-project capabilities, backed by ArangoDB:
 
 The PRD for this system itself is [docs/PRD.md](docs/PRD.md) (yes, `/prd-sync` can audit this
 repo against it). The current change round is documented in
-[docs/implementation-plan.md](docs/implementation-plan.md).
+[docs/implementation-plan.md](docs/implementation-plan.md); the latest assessment, live metrics,
+and next actions are in [docs/scorecard.md](docs/scorecard.md).
 
 **New teammate? Start with [ONBOARDING.md](ONBOARDING.md)** — cold start to live in ~10 minutes.
 Full design, shared-deployment guidance, and troubleshooting live in **[setup.md](setup.md)**.
@@ -104,6 +106,7 @@ poetry run python ~/code/arango-shared-memory/scripts/install.py
 setup.md                       Full design + onboarding (canonical)
 docs/PRD.md                    The PRD for this system (REQ-numbered; /prd-sync-auditable)
 docs/implementation-plan.md    Current change round: defects, gaps, migration
+docs/scorecard.md              System scorecard: grades, live metrics, ranked next actions
 scripts/
   install.py                   One-shot: schema + migrate + view + verify (+ optional embeddings/graph)
   setup_schema.py              Collections + indexes + JSON schema validation (idempotent)
@@ -117,7 +120,8 @@ scripts/
   phase3_lifecycle.py          Supersede / TTL / staleness (periodic)
   eval_retrieval.py            Golden-set retrieval eval: recall@k / MRR per mode (bm25,
                                hybrid, hybrid+graph); history in eval_runs. Run after any
-                               ranking change — the AQL mirrors the server's.
+                               ranking change — the AQL mirrors the server's
+                               (tests/test_eval_aql_sync.py guards the two from drifting).
   verify.py                    Health check + adoption/read-path scorecard
   add_teammate.py              Per-developer least-privilege users (also drives attribution)
   install_visualizer.py        Graph Visualizer theme/queries/canvas actions for memory_graph

@@ -94,9 +94,14 @@ def main() -> int:
         password=resolve("ARANGO_ROOT_PASSWORD", ""))
     print(f"Phase 2b — LLM edges via {LLM}{'  [DRY RUN]' if DRY_RUN else ''}")
 
-    # Ensure edge definitions exist in the graph.
-    g = db.graph(GRAPH)
-    existing = {e["edge_collection"] for e in g.edge_definitions()}
+    # Ensure the graph exists (phase2 may not have run), then its edge definitions.
+    if not db.has_graph(GRAPH):
+        if DRY_RUN:
+            print(f"  graph {GRAPH!r} absent — would create it")
+        else:
+            db.create_graph(GRAPH)
+    g = db.graph(GRAPH) if db.has_graph(GRAPH) else None
+    existing = {e["edge_collection"] for e in g.edge_definitions()} if g else set()
     for name, frm, to in [(ADDR, "shared_patterns", "drift_alerts"),
                           (DEP, "drift_alerts", "drift_alerts")]:
         if name not in existing and not DRY_RUN:

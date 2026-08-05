@@ -120,8 +120,11 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
   the drift queue is non-empty, with these rails: it never blocks twice in a row
   (respects `stop_hook_active`), it fails open on any internal error, and it can be
   bypassed per-repo with a `.no-drift-gate` marker file.
-- **REQ-071** All hooks MUST be self-configuring from the project's CLAUDE.md
-  (PROJECT_ID, PRD_FILE) — no per-project rendering of hook code.
+- **REQ-071** All hooks MUST be self-configuring at runtime from the project's agent
+  doc — `AGENTS.md` (canonical) preferred, `CLAUDE.md` as fallback, merged per field
+  (PROJECT_ID, PROJECT_TYPE, PRD_FILE) — with no per-project rendering of hook code.
+  Bootstrap ships `CLAUDE.md`; `AGENTS.md` is an optional override, not a required
+  second copy.
 - **REQ-072** Cursor rules (`workflow.mdc`) MUST describe the same save/search flows as
   the Claude skills (server-side tools, embed-then-insert), never a stale alternative.
 

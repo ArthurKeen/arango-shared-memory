@@ -142,6 +142,65 @@ class TestStopGate(TmpProject):
         self.assertEqual(proc.stdout.strip(), "")
 
 
+class TestCaptureMiner(unittest.TestCase):
+    """The Stop-hook miner should detect resolved failures for Bash AND MCP tools."""
+
+    def _load(self):
+        spec = importlib.util.spec_from_file_location(
+            "capture_candidates", os.path.join(HOOKS, "capture_candidates.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _transcript(self, entries):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "t.jsonl")
+        with open(p, "w") as fh:
+            for obj in entries:
+                fh.write(json.dumps(obj) + "\n")
+        return p
+
+    @staticmethod
+    def _use(tid, name, command=""):
+        return {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": name, "input": {"command": command}}]}}
+
+    @staticmethod
+    def _result(tid, out, is_error=False):
+        return {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid, "content": out, "is_error": is_error}]}}
+
+    def test_mines_bash_and_mcp_resolved_failures(self):
+        cc = self._load()
+        entries = [
+            self._use("b1", "Bash", "cd x && pytest -q"),
+            self._result("b1", "E   assert False\nFAILED", is_error=True),
+            self._use("m1", "execute-aql-query"),
+            self._result("m1", json.dumps({"result": {"error": "AQL: syntax error", "error_code": 1501}})),
+            self._use("b2", "Bash", "pytest -q"),
+            self._result("b2", "3 passed"),
+            self._use("m2", "execute-aql-query"),
+            self._result("m2", json.dumps({"result": {"rows": []}})),
+        ]
+        candidates, n = cc.mine(self._transcript(entries))
+        summaries = " ".join(c["summary"] for c in candidates)
+        self.assertEqual(n, 4)                       # 4 tool events recorded (Bash + MCP)
+        self.assertIn("pytest", summaries)           # Bash resolved-failure
+        self.assertIn("execute-aql-query", summaries)  # MCP resolved-failure
+
+    def test_edit_write_churn_is_ignored(self):
+        cc = self._load()
+        entries = [
+            self._use("e1", "Edit", ""),
+            self._result("e1", "error: file not found", is_error=True),
+            self._use("e2", "Edit", ""),
+            self._result("e2", "ok"),
+        ]
+        candidates, n = cc.mine(self._transcript(entries))
+        self.assertEqual(n, 0)          # Edit/Write are not captured
+        self.assertEqual(candidates, [])
+
+
 class TestSessionRecallParsing(unittest.TestCase):
     def setUp(self):
         self.mod = _load_session_recall()

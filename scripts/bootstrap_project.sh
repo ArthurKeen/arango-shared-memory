@@ -148,6 +148,6 @@ cat <<EOF
 
 Done. Next steps for this project:
   1. Edit CLAUDE.md and fill in TECH_STACK / any remaining <PLACEHOLDER> values.
-  2. Ensure the arangodb-mcp MCP server is registered (see setup.md STEP 2).
+  2. Ensure the arangodb-memory-mcp MCP server is registered (see setup.md STEP 3).
   3. Run /prd-sync to establish the initial drift baseline.
 EOF

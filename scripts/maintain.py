@@ -110,41 +110,49 @@ def edge_weights(db) -> None:
 
 
 def patch_obs_provenance(db) -> None:
-    """Link prd_patches / sync_observations to their project nodes."""
+    """Link prd_patches / sync_observations to their project nodes.
+
+    Each collection is handled independently: a missing one is skipped without
+    starving the sibling that IS present (older installs may have only one).
+    """
     print(f"\n{'=' * 64}\n▶ patch/observation provenance (inline)\n{'=' * 64}")
-    for name in ("prd_patches", "sync_observations"):
-        if not db.has_collection(name):
-            print(f"  {name} absent — run scripts/migrate.py; skipped")
-            return
+    present = []
+    for edge, coll in ((PATCHP, "prd_patches"), (OBSP, "sync_observations")):
+        if db.has_collection(coll):
+            present.append((edge, coll))
+        else:
+            print(f"  {coll} absent — run scripts/migrate.py; skipped")
+    if not present:
+        return
     if not db.has_graph(GRAPH):
         print(f"  graph {GRAPH!r} absent (no embeddings yet?) — skipped")
         return
     g = db.graph(GRAPH)
     existing = {e["edge_collection"] for e in g.edge_definitions()}
-    for name, frm in ((PATCHP, "prd_patches"), (OBSP, "sync_observations")):
-        if name not in existing:
+    for edge, coll in present:
+        if edge not in existing:
             if DRY_RUN:
-                print(f"  would add edge definition {name!r}")
+                print(f"  would add edge definition {edge!r}")
                 continue
-            g.create_edge_definition(edge_collection=name,
-                                     from_vertex_collections=[frm],
+            g.create_edge_definition(edge_collection=edge,
+                                     from_vertex_collections=[coll],
                                      to_vertex_collections=["project_registry"])
-            print(f"  + edge definition {name!r}")
+            print(f"  + edge definition {edge!r}")
     if DRY_RUN:
         print("  would upsert registry nodes + rebuild provenance edges")
         return
-    # De-orphan: registry node for every project_id seen on a patch/observation.
-    db.aql.execute("""
-      FOR pid IN UNIQUE(APPEND(
-            (FOR x IN prd_patches RETURN x.project_id),
-            (FOR y IN sync_observations RETURN y.project_id)))
+    # De-orphan: registry node for every project_id seen on a PRESENT patch/observation.
+    arrays = [f"(FOR x IN {coll} RETURN x.project_id)" for _, coll in present]
+    union_expr = arrays[0] if len(arrays) == 1 else f"APPEND({arrays[0]}, {arrays[1]})"
+    db.aql.execute(f"""
+      FOR pid IN UNIQUE({union_expr})
         FILTER pid != null
-        UPSERT { _key: pid }
-        INSERT { _key: pid, project_id: pid, project_name: pid, project_type: "other",
-                 open_gaps: 0, patterns_contributed: 0, last_sync: null, autocreated: true }
-        UPDATE { } IN project_registry
+        UPSERT {{ _key: pid }}
+        INSERT {{ _key: pid, project_id: pid, project_name: pid, project_type: "other",
+                 open_gaps: 0, patterns_contributed: 0, last_sync: null, autocreated: true }}
+        UPDATE {{ }} IN project_registry
     """)
-    for edge, coll in ((PATCHP, "prd_patches"), (OBSP, "sync_observations")):
+    for edge, coll in present:
         n = len(list(db.aql.execute(f"""
           FOR x IN {coll}
             FILTER x.project_id != null
