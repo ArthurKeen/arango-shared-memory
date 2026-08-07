@@ -307,21 +307,37 @@ def main() -> int:
         if pending:
             print(f"  {YELLOW}embeddings deferred (pending backfill): {pending} "
                   f"— run pattern-index or phase1b_setup.py{RESET}")
-    # search_log metrics (independent of whether an eval history exists).
+    # Read-path telemetry (independent of whether an eval history exists).
+    # SessionStart recalls are real memory reads, but they are separated from
+    # interactive pattern-search calls so they do not dilute apply/search.
     if db.has_collection("search_log"):
-        searches = count("search_log")
-        hits = count("search_log", "FILTER d.hit == true")
+        searches = count("search_log", 'FILTER d.mode != "session_recall"')
+        recalls = count("search_log", 'FILTER d.mode == "session_recall"')
+        hits = count("search_log", 'FILTER d.mode != "session_recall" AND d.hit == true')
         rate = f"{100*hits/searches:.0f}%" if searches else "n/a"
-        print(f"  searches logged:                    {searches}   (hit rate ≥0.5 relevance: {rate})")
+        print(f"  interactive searches logged:        {searches}   "
+              f"(hit rate ≥0.5 relevance: {rate})")
+        print(f"  automatic SessionStart recalls:      {recalls}")
         apprate = f"{total_applies/searches:.2f}" if searches else "n/a"
-        print(f"  apply events per search:            {apprate}")
+        print(f"  apply events per interactive search: {apprate}")
         by_proj = list(db.aql.execute(
-            "FOR s IN search_log FILTER s.project_id != null COLLECT p = s.project_id "
-            "WITH COUNT INTO n SORT n DESC RETURN {p, n}"))
+            'FOR s IN search_log FILTER s.project_id != null COLLECT p = s.project_id '
+            'AGGREGATE searches = SUM(s.mode == "session_recall" ? 0 : 1), '
+            'recalls = SUM(s.mode == "session_recall" ? 1 : 0) '
+            'SORT searches + recalls DESC RETURN {p, searches, recalls}'))
         if by_proj:
-            print("  searches by project: " + ", ".join(f"{r['p']}={r['n']}" for r in by_proj))
+            print("  reads by project: "
+                  + ", ".join(f"{r['p']}={r['searches']} search/{r['recalls']} recall"
+                              for r in by_proj))
+        if db.has_collection("project_registry"):
+            zero = list(db.aql.execute(
+                "LET readers = UNIQUE(FOR s IN search_log FILTER s.project_id != null "
+                "RETURN s.project_id) FOR p IN project_registry "
+                "FILTER p.project_id NOT IN readers SORT p.project_id RETURN p.project_id"))
+            print(f"  registered projects with no read:    {len(zero)}"
+                  + (f"   ({', '.join(zero)})" if zero else ""))
         if not searches:
-            print(f"      {YELLOW}(no searches logged yet — reads are how memory pays off; "
+            print(f"      {YELLOW}(no interactive searches logged yet — reads are how memory pays off; "
                   f"run /pattern-search before solving){RESET}")
     else:
         print(f"      {YELLOW}(search_log absent — instrumentation not yet active; reload the "

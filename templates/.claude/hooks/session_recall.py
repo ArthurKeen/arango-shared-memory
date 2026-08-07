@@ -95,6 +95,37 @@ def aql(host, db, auth, query, bind_vars=None, insecure=False):
         return json.loads(r.read()).get("result", [])
 
 
+def log_recall(host, db, auth, project_id, keys, insecure=False):
+    """Record automatic SessionStart reads without conflating them with MCP searches."""
+    if resolve("SHARED_MEMORY_DISABLE_RECALL_LOG", "").lower() in ("1", "true", "yes", "on"):
+        return
+    aql(host, db, auth, """
+        LET now = DATE_ISO8601(DATE_NOW())
+        LET bumped = (
+          FOR key IN @keys
+            LET p = DOCUMENT("shared_patterns", key)
+            FILTER p != null
+            UPDATE p WITH {
+              surfaced_count: (p.surfaced_count == null ? 0 : p.surfaced_count) + 1,
+              last_surfaced: now
+            } IN shared_patterns
+            RETURN NEW._key
+        )
+        INSERT {
+          query: "session-start digest",
+          project_id: @pid,
+          by: "session_recall",
+          mode: "session_recall",
+          count: LENGTH(@keys),
+          top_key: FIRST(@keys),
+          hit: LENGTH(@keys) > 0,
+          result_keys: @keys,
+          created_at: now
+        } INTO search_log
+        RETURN NEW._key
+    """, {"pid": project_id, "keys": keys}, insecure)
+
+
 def sha256_file(path):
     try:
         h = hashlib.sha256()
@@ -174,6 +205,11 @@ def main() -> int:
           RETURN {key: p._key, cat: p.problem_category, type: p.memory_type,
                   "desc": p.problem_description}""",
               {"pid": pid, "ptype": cfg.get("project_type", "other")}, insecure)
+    try:
+        log_recall(host, db, auth, pid, [item["key"] for item in top if item.get("key")],
+                   insecure)
+    except Exception:  # noqa: BLE001 - telemetry must not suppress the digest
+        pass
 
     lines = [f"[SHARED-MEMORY] Session digest for project '{pid}':"]
     lines.append(f"  Open drift gaps: {len(alerts)}"
@@ -202,8 +238,10 @@ def main() -> int:
             tag = f"{t.get('type') or 'pattern'}/{t.get('cat') or '?'}"
             lines.append(f"    - [{tag}] {(t['desc'] or '')[:120]}  ({t['key']})")
 
-    lines.append("  Protocol: /pattern-search before solving -> /pattern-save after -> "
-                 "/prd-sync before ending a session that touched implementation files.")
+    lines.append("  Protocol: /pattern-search before solving (filter memory_type=feedback for "
+                 "guidance or pattern for solutions) -> pattern-applied immediately for any "
+                 "result actually reused -> /pattern-save after -> /prd-sync before ending a "
+                 "session that touched implementation files.")
     print("\n".join(lines))
     return 0
 
