@@ -10,3 +10,6 @@ docs/.env
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# macOS finder metadata
+.DS_Store

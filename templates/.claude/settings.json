@@ -20,6 +20,15 @@
             "command": "python3 .claude/hooks/drift_queue.py"
           }
         ]
+      },
+      {
+        "matcher": "mcp__arangodb-memory-mcp__(pattern-search|pattern-applied)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/pattern_apply_tracker.py"
+          }
+        ]
       }
     ],
     "Stop": [

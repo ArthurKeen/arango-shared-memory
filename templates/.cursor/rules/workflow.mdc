@@ -19,6 +19,8 @@ alwaysApply: true
    semantic + keyword retrieval — pass text, get ranked results):
    - `query_text`: the full problem description
    - `project_id`: the PROJECT_ID from AGENTS.md (or CLAUDE.md)
+   - `memory_type`: use `feedback` first when checking project/user guidance; use
+     `pattern` for reusable technical solutions; omit only when cross-type recall is useful
    - `limit`: 8
 2. Present the top results (problem, solution, tags, source project) and ask which to apply.
 3. If you apply one or more results, record it with the `pattern-applied` tool
@@ -35,8 +37,7 @@ alwaysApply: true
 ## Session end
 - Remind the user to run `/prd-sync` if implementation files (or the PRD) changed.
 
-> Note: Cursor does not run the Claude Code hooks in `.claude/` (session digest, drift
-> queue, stop gate) — in Cursor these rules are the enforcement layer, so follow them.
-> (Cursor's own `hooks.json` — afterFileEdit / stop / beforeSubmitPrompt — could enforce
-> these mechanically like the Claude hooks do; that is a tracked future enhancement. Until
-> then, honor these rules.)
+> Cursor-native hooks in `.cursor/hooks.json` now inject the SessionStart digest, queue
+> implementation/PRD edits, and issue one stop follow-up for unresolved drift or missing
+> pattern reuse attribution. They fail open on hook/runtime errors and never auto-mark a
+> merely surfaced pattern as applied.

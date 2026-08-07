@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # bootstrap_project.sh — scaffold a target project with the workflow-automation
-# artifacts (CLAUDE.md, .claude/ hooks + skills, .cursor/rules/workflow.mdc) from
+# artifacts (CLAUDE.md, .claude/ hooks + skills, .cursor rules + hooks) from
 # the templates in this repo, filling in the per-project placeholder values.
 #
 # Usage:
@@ -124,6 +124,7 @@ place ".claude/hooks/session_recall.py" 0
 place ".claude/hooks/drift_queue.py" 0
 place ".claude/hooks/drift_stop_gate.sh" 0
 place ".claude/hooks/capture_candidates.py" 0
+place ".claude/hooks/pattern_apply_tracker.py" 0
 place ".claude/skills/prd-sync/SKILL.md" 0
 place ".claude/skills/prd-sync/check_evidence.py" 0
 place ".claude/skills/pattern-save/SKILL.md" 0
@@ -131,13 +132,20 @@ place ".claude/skills/pattern-search/SKILL.md" 0
 place ".claude/skills/arangodb-visualizer-customizer/SKILL.md" 0
 place ".claude/skills/arangodb-visualizer-customizer/examples.md" 0
 place ".cursor/rules/workflow.mdc" 1
+place ".cursor/hooks.json" 0
+place ".cursor/hooks/shared_memory_session_start.py" 0
+place ".cursor/hooks/shared_memory_drift_queue.py" 0
+place ".cursor/hooks/shared_memory_apply_tracker.py" 0
+place ".cursor/hooks/shared_memory_stop_gate.py" 0
 
 # Ensure the personal-infra entries are git-ignored in the target project.
 # The two *.pre-update.* globs cover --force backups of files living OUTSIDE the
 # already-ignored .claude/ tree (project-root CLAUDE.md, committed .cursor rules).
 GI="$TARGET/.gitignore"
 for entry in ".prd-drift-queue/" ".pattern-capture-queue/" ".claude/" "CLAUDE.md" ".no-drift-gate" \
-             "CLAUDE.md.pre-update.*" ".cursor/rules/workflow.mdc.pre-update.*"; do
+             ".cursor/.shared-memory-sessions/" "CLAUDE.md.pre-update.*" \
+             ".cursor/rules/workflow.mdc.pre-update.*" ".cursor/hooks.json.pre-update.*" \
+             ".cursor/hooks/*.pre-update.*"; do
   if [ ! -f "$GI" ] || ! grep -qxF "$entry" "$GI"; then
     echo "$entry" >> "$GI"
     echo "  gitignore += $entry"

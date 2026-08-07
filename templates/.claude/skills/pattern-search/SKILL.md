@@ -17,14 +17,18 @@ usage). You pass text and get ranked results — no embeddings or AQL in the age
 
 ### Phase 1 — Search
 Call the server-side tool with the raw problem description. Pass `project_id` (from
-AGENTS.md/CLAUDE.md) so the read is logged for per-project analytics:
+AGENTS.md/CLAUDE.md) so the read is logged for per-project analytics. Choose
+`memory_type` deliberately: `feedback` for standing corrections/preferences,
+`pattern` for reusable technical solutions, `project` for project facts, and omit
+it only when a cross-type result set is useful:
 ```
 Use tool: pattern-search
 query_text: "<the full problem description>"
 project_id: "<PROJECT_ID from AGENTS.md>"
+memory_type: "feedback|pattern|project|user|reference"
 limit: 8
 ```
-Returns `{ mode: "hybrid"|"bm25", count, patterns: [ { _key, project_id, project_type,
+Returns `{ mode: "hybrid+graph"|"hybrid"|"bm25", count, patterns: [ { _key, project_id, project_type,
 problem_category, problem_description, solution_summary, tags, score, relevance, importance,
 usage_count, ... } ] }`, already ranked. `mode:"bm25"` means the vector index/embeddings aren't
 available yet (keyword-only) — still useful.

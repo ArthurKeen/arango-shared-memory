@@ -15,9 +15,13 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOKS = os.path.join(REPO, "templates", ".claude", "hooks")
+CURSOR_HOOKS = os.path.join(REPO, "templates", ".cursor", "hooks")
 DRIFT_QUEUE = os.path.join(HOOKS, "drift_queue.py")
 STOP_GATE = os.path.join(HOOKS, "drift_stop_gate.sh")
 SESSION_RECALL = os.path.join(HOOKS, "session_recall.py")
+CLAUDE_APPLY_TRACKER = os.path.join(HOOKS, "pattern_apply_tracker.py")
+CURSOR_APPLY_TRACKER = os.path.join(CURSOR_HOOKS, "shared_memory_apply_tracker.py")
+CURSOR_STOP_GATE = os.path.join(CURSOR_HOOKS, "shared_memory_stop_gate.py")
 
 CLAUDE_MD = """# PROJECT: Demo
 - PROJECT_ID: demo-api
@@ -28,6 +32,13 @@ CLAUDE_MD = """# PROJECT: Demo
 
 def _load_session_recall():
     spec = importlib.util.spec_from_file_location("session_recall", SESSION_RECALL)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -141,6 +152,17 @@ class TestStopGate(TmpProject):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(proc.stdout.strip(), "")
 
+    def test_pending_pattern_attribution_blocks_once(self):
+        state_dir = os.path.join(self.cwd, ".claude", ".shared-memory-sessions")
+        os.makedirs(state_dir)
+        with open(os.path.join(state_dir, "session-1.json"), "w") as fh:
+            json.dump({"surfaced_keys": ["p1"], "applied_keys": []}, fh)
+        proc = self.run_gate({"session_id": "session-1"})
+        self.assertEqual(proc.returncode, 0)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("reuse attribution is incomplete", out["reason"])
+
 
 class TestCaptureMiner(unittest.TestCase):
     """The Stop-hook miner should detect resolved failures for Bash AND MCP tools."""
@@ -199,6 +221,95 @@ class TestCaptureMiner(unittest.TestCase):
         candidates, n = cc.mine(self._transcript(entries))
         self.assertEqual(n, 0)          # Edit/Write are not captured
         self.assertEqual(candidates, [])
+
+
+class TestCursorApplyGate(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.cwd = self.dir.name
+        self.previous = os.getcwd()
+        os.chdir(self.cwd)
+        self.tracker = _load("cursor_apply_tracker", CURSOR_APPLY_TRACKER)
+        self.stop = _load("cursor_stop_gate", CURSOR_STOP_GATE)
+
+    def tearDown(self):
+        os.chdir(self.previous)
+        self.dir.cleanup()
+
+    def test_search_then_apply_clears_pending_attribution(self):
+        search = {
+            "conversation_id": "conv-1",
+            "tool_name": "pattern-search",
+            "tool_input": {"query_text": "a hard problem"},
+            "tool_output": json.dumps(
+                {"results": [{"_key": "pattern-a"}, {"_key": "pattern-b"}]}
+            ),
+        }
+        state, surfaced = self.tracker.update_state(search)
+        self.assertEqual(surfaced, ["pattern-a", "pattern-b"])
+        self.assertEqual(state["last_query"], "a hard problem")
+        self.assertIn("pattern-a", self.stop.followup(search))
+
+        applied = {
+            "conversation_id": "conv-1",
+            "tool_name": "pattern-applied",
+            "tool_input": {"keys": ["pattern-a", "pattern-b"]},
+        }
+        self.tracker.update_state(applied)
+        self.assertEqual(self.stop.followup(applied), "")
+
+    def test_viewed_results_are_not_auto_applied(self):
+        payload = {
+            "conversation_id": "conv-2",
+            "tool_name": "MCP:pattern-search",
+            "tool_output": {"result": [{"_key": "only-surfaced"}]},
+        }
+        self.tracker.update_state(payload)
+        message = self.stop.followup(payload)
+        self.assertIn("reuse attribution is incomplete", message)
+        self.assertIn("only the key(s) actually used", message)
+
+    def test_cursor_drift_gate_returns_followup(self):
+        os.makedirs(".prd-drift-queue")
+        open(".prd-drift-queue/1_app.py", "w").close()
+        open(".prd-drift-queue/prd_2_PRD.md", "w").close()
+        message = self.stop.followup({"conversation_id": "conv-3"})
+        self.assertIn("2 change(s)", message)
+        self.assertIn("1 PRD edit(s)", message)
+
+
+class TestClaudeApplyTracker(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.previous = os.getcwd()
+        os.chdir(self.dir.name)
+        self.tracker = _load("claude_apply_tracker", CLAUDE_APPLY_TRACKER)
+
+    def tearDown(self):
+        os.chdir(self.previous)
+        self.dir.cleanup()
+
+    def test_tracks_search_and_apply_without_auto_applying(self):
+        surfaced = self.tracker.update({
+            "session_id": "s1",
+            "tool_name": "mcp__arangodb-memory-mcp__pattern-search",
+            "tool_response": {"result": {"patterns": [{"_key": "p1"}]}},
+        })
+        self.assertEqual(surfaced, ["p1"])
+        path = os.path.join(".claude", ".shared-memory-sessions", "s1.json")
+        with open(path) as fh:
+            state = json.load(fh)
+        self.assertEqual(state["surfaced_keys"], ["p1"])
+        self.assertNotIn("applied_keys", state)
+
+        self.tracker.update({
+            "session_id": "s1",
+            "tool_name": "mcp__arangodb-memory-mcp__pattern-applied",
+            "tool_input": {"keys": ["p1"]},
+        })
+        with open(path) as fh:
+            state = json.load(fh)
+        self.assertEqual(state["applied_keys"], ["p1"])
 
 
 class TestSessionRecallParsing(unittest.TestCase):
@@ -283,6 +394,22 @@ class TestSessionRecallParsing(unittest.TestCase):
             os.chdir(cwd)
         self.assertEqual(cfg["project_id"], "demo-api")
         self.assertEqual(cfg["prd_file"], "docs/PRD.md")
+
+    def test_recall_logging_is_distinct_from_interactive_search(self):
+        calls = []
+        original = self.mod.aql
+        self.mod.aql = lambda *args, **kwargs: calls.append((args, kwargs))
+        previous = os.environ.pop("SHARED_MEMORY_DISABLE_RECALL_LOG", None)
+        try:
+            self.mod.log_recall("http://db", "memory", "auth", "demo-api", ["p1"])
+        finally:
+            self.mod.aql = original
+            if previous is not None:
+                os.environ["SHARED_MEMORY_DISABLE_RECALL_LOG"] = previous
+        self.assertEqual(len(calls), 1)
+        query = calls[0][0][3]
+        self.assertIn('mode: "session_recall"', query)
+        self.assertEqual(calls[0][0][4], {"pid": "demo-api", "keys": ["p1"]})
 
 
 class TestSessionRecallFailOpen(TmpProject):
