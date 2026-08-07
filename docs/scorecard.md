@@ -1,8 +1,8 @@
 # System Scorecard — arango-shared-memory
 
-_Last updated: 2026-08-05 (round 2: P1/P2 addressed, incl. server repo; MCP server reloaded and
-the new `memory_type` filter verified live from Cursor — valid types filter, invalid rejected by
-validation; full read/write/delete round-trip confirmed end-to-end). Method: static review of
+_Last updated: 2026-08-05 (round 3: operational backlog triage + Cursor/Claude hook enforcement;
+28 local bootstrapped projects refreshed; SessionStart verified in all 9 locally available
+zero-search registry projects; apply-attribution gate shipped). Method: static review of
 `templates/`, `scripts/`, `docs/PRD.md`, tests, the `arango-solutions-mcp-server` memory tools,
 plus live `migrate.py` + `verify.py` + MCP tool calls against the shared prod cluster
 (`prod.demo.pilot.arango.ai`, db `memory`, ArangoDB 3.12.9-1)._
@@ -19,9 +19,9 @@ concentrated. That is behavioral — it moves with usage and triage, not commits
 |---|---|---|---|
 | PRD requirement coverage | A− | ↑ | §3 retrieval now fully IMPLEMENTED (server hard-excludes superseded; memory_type first-class + filter) |
 | Live health (prod) | A− | = | verify.py all-green |
-| Adoption & value (read-path) | C+ | = | 25% surfaced→applied, usage concentrated — the real ceiling |
-| Engineering quality | A− | = | 47 DB-free tests here + 27 server tests pass; eval-drift guard added |
-| Reliability / robustness | A− | ↑ from B+ | graph guards, provenance, capture breadth, memory_type validation, eval guard |
+| Adoption & value (read-path) | B− | ↑ | 29% surfaced→applied; automatic recall + apply attribution now instrumented |
+| Engineering quality | A− | = | 55 passing + 2 skipped DB-free tests here; 27 server tests passed in round 2 |
+| Reliability / robustness | A | ↑ | Cursor/Claude parity, merge-safe rollout, separate automatic-recall telemetry |
 
 ## Changes applied
 
@@ -50,6 +50,24 @@ concentrated. That is behavioral — it moves with usage and triage, not commits
 - **Doc reconciliation:** `implementation-plan.md` "server-side changes" moved from
   Out-of-scope to SHIPPED.
 
+### Round 3 (operational leverage + enforcement)
+- **Cursor-native parity:** project hooks now inject the shared-memory SessionStart digest,
+  queue code/PRD edits, and issue one Stop follow-up for unresolved drift or missing apply
+  attribution. The rollout merges by event/command and preserves unrelated Cursor hooks.
+- **Honest apply capture:** Cursor and Claude PostToolUse hooks track keys returned by
+  `pattern-search`; `pattern-applied` clears only keys explicitly reported. The Stop gate asks
+  once when attribution is incomplete. It never auto-applies all surfaced results.
+- **Automatic recall telemetry:** successful SessionStart reads are logged with
+  `mode: "session_recall"` and surfaced counters. `verify.py` reports these separately from
+  interactive searches, preserving a meaningful apply/search denominator.
+- **Rollout:** merge-refreshed 28 bootstrapped projects under `~/code`; a second dry run reported
+  all 28 unchanged. Cursor digest wrappers were smoke-tested with telemetry disabled in
+  `agentic-graph-analytics` and `FinReflectKG` (`domyn`).
+- **Zero-search audit:** all 12 registry entries accounted for. Digest execution succeeded in
+  all 9 with local checkouts. `brambles-pallet-network` and `feature-tracker` have no local
+  checkout; stale `multi-tenant-time-travel-architecture` aligns with the already-registered
+  `network-asset-management-demo`, not `multi-tenant-autograph`.
+
 ## 1. PRD requirement coverage
 
 All 14 sections IMPLEMENTED. §3 (retrieval & ranking) — previously PARTIAL pending
@@ -59,24 +77,26 @@ search, `co_applied` edge learning + re-embed-on-edit via skills/maintenance.
 
 ## 2. Live health (prod)
 
-`verify.py`: ALL CHECKS PASSED (7 collections, indexes, schema validation, round-trip,
+Prior `verify.py`: ALL CHECKS PASSED (7 collections, indexes, schema validation, round-trip,
 `patterns_search` view, `memory_graph` + 8 edge defs, vector + TTL indexes, `memory_type` on
-all 63 patterns). Backlogs (usage/ops, not health): ~93 open drift alerts, 56 unprocessed
-observations, 1 proposed PRD patch.
+all 63 patterns). Current live backlog query: **92 open drift alerts** (67 PARTIAL, 25 MISSING),
+**31 unprocessed observations**, 1 proposed PRD patch.
 
 ## 3. Adoption & value — the read-path (unchanged; the ceiling)
 
-63 patterns, 21 projects. Applied 9/63 (12 applies). Surfaced 36/63. **Surfaced→applied
-25%.** 32 searches, 0.38 applies/search, usage concentrated (aws-ontology=10, r2g=5,
-project-sentinel=4; ~12 projects at 0). Retrieval eval MRR 0.98 / R@5 1.00 across modes —
-ranking is not the problem.
+63 patterns, 21 projects. Applied 12/63 (15 applies). Surfaced 41/63. **Surfaced→applied
+29%.** 39 interactive searches after the live `memory_type=feedback` verification call,
+0.38 applies/search, and 12 registry projects had no logged interactive search before hook
+rollout. Future SessionStart reads are now logged separately; smoke tests explicitly disabled
+logging so the adoption number was not inflated. Retrieval eval remains MRR 0.98 / R@5 1.00
+across modes — ranking is not the problem.
 
 ## 4. Remaining risks (small)
 
-- **Cursor enforcement** is honor-system (decision recorded); mechanical `hooks.json`
-  enforcement is a tracked future feature, not built.
-- **Automatic `pattern-applied` capture** — still agent-driven (now MANDATORY in protocol);
-  a server/hook-driven capture is the fallback if the funnel stays low.
+- **Apply truth still requires agent judgment.** Hooks now force one attribution pass, but
+  deliberately cannot infer reuse from a search alone. This is the safe automation boundary.
+- Three registry entries have no matching current checkout/identity and need registry cleanup
+  before they can produce new project-local reads.
 - Capture miner correction-detection is still regex-narrow (by design).
 
 ## 5. Recommended next actions
@@ -87,12 +107,22 @@ scorecard items.
 **Reload — DONE.** MCP server reloaded; the `pattern-search` `memory_type` filter is verified
 live (valid types filter; invalid types rejected by the new validation). No restart pending.
 
-**Operational (the actual lever now — not code):**
-- Move the surfaced→applied number: use the `memory_type` filter + MANDATORY `pattern-applied`;
-  re-check `verify.py` over the coming weeks.
-- Drive search in the ~12 zero-search projects (confirm the SessionStart digest fires there).
-- Triage the backlog: 56 unprocessed observations, 91 open drift alerts, 1 proposed PRD patch.
+**Operational work completed now:**
+- `memory_type` guidance is explicit in templates/digests; apply attribution is mandatory and
+  mechanically nudged in both clients.
+- SessionStart was verified for every locally available zero-search project; future real starts
+  produce distinct recall telemetry.
+- Observation triage was classified: 10 promote (already represented by an alert/patch),
+  1 duplicate, 20 acknowledge. The exact live bulk transition awaits database-write approval.
+- Alert triage: 71/92 alerts are concentrated in six projects. Do not bulk-close them. Immediate
+  review gates are `brambles-pallet-network/CAND-02` (evidence recommends re-close, but prior
+  reopen makes this a user decision) and `arango-ontoextract/FR-19.4` (PRD patch decision).
+- Proposed FR-19.4 patch review: the premise is verified — two adapter paths are deterministic or
+  externally delegated and have no AOE-owned prompt. Recommendation: **accept with edited wording**
+  that distinguishes LLM prompt injection from deterministic CQ-priority behavior without
+  claiming the latter is already implemented.
 
-**Optional future features (tracked):**
-- Cursor `hooks.json` enforcement to match the Claude hooks.
-- Server/hook-driven automatic `pattern-applied` capture if reuse stays under-reported.
+**Next measurement:** run `scripts/verify.py` weekly for 4 weeks and compare interactive searches,
+automatic recalls, surfaced→applied conversion, and zero-read projects. Scheduling mechanism is
+left to the operator (maintenance launchd/cron or Cursor Automation); no schedule was silently
+installed.

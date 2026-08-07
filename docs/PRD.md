@@ -71,6 +71,10 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
 - **REQ-032** The recall hook MUST detect PRD staleness: if the hash of the project's
   PRD file differs from `project_registry.prd_sha256`, the digest says the PRD changed
   since the last sync.
+- **REQ-033** Successful automatic recalls MUST be recorded in `search_log` with
+  `mode: "session_recall"` and kept distinct from interactive `pattern-search` calls,
+  including surfaced-key counters, so adoption can be measured without distorting
+  apply-per-interactive-search.
 
 ## 5. Drift detection — PRD → code
 
@@ -127,6 +131,13 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
   second copy.
 - **REQ-072** Cursor rules (`workflow.mdc`) MUST describe the same save/search flows as
   the Claude skills (server-side tools, embed-then-insert), never a stale alternative.
+- **REQ-073** Bootstrapped projects MUST install Cursor-native project hooks that mirror
+  the Claude SessionStart digest, file-edit drift queue, and one-pass Stop gate. Existing
+  unrelated Cursor hooks MUST be preserved during rollout.
+- **REQ-074** A hook-assisted apply-attribution gate MUST track keys surfaced by
+  `pattern-search`, clear keys recorded by `pattern-applied`, and issue at most one Stop
+  follow-up when attribution is missing. It MUST NOT auto-apply every surfaced key:
+  viewing a result is not evidence that it influenced the solution.
 
 ## 9. Lifecycle and scheduled maintenance
 

@@ -20,9 +20,12 @@ cross-project capabilities, backed by ArangoDB:
    drift markers (code *and* PRD edits, incl. MultiEdit/NotebookEdit); a Stop hook mines the
    session transcript for **candidate memories** (resolved tool failures — Bash or MCP — and user
    corrections → `.pattern-capture-queue/`, triaged by `/pattern-save`); a Stop gate blocks session
-   end (once) while the drift queue is non-empty.
+   end (once) while the drift queue is non-empty. Cursor-native project hooks now mirror the
+   Claude hooks. Both clients track searched pattern keys and issue one attribution follow-up when
+   `pattern-applied` was omitted; they never equate "surfaced" with "applied."
 4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
-   project's state (including the PRD content hash); `search_log` records every search; every
+   project's state (including the PRD content hash); `search_log` records interactive searches
+   and automatic SessionStart recalls as distinct modes; every
    write is stamped with **who did it** (`saved_by` / `detected_by` / apply log, from each
    developer's own scoped DB account) so reuse and contribution are measurable *per person*,
    not assumed.
@@ -63,6 +66,10 @@ cd ~/code/arango-solutions-mcp-server && poetry run python ~/code/arango-shared-
 # 4. Bootstrap each project (installs the CURRENT skills/hooks from templates/ — never hand-copy them):
 ~/code/arango-shared-memory/scripts/bootstrap_project.sh --target ~/code/my-api \
   --project-name "My API" --project-id my-api --project-type web-api --prd-file docs/PRD.md
+
+# Existing bootstrapped projects: preview, then merge-refresh hooks across ~/code.
+python3 ~/code/arango-shared-memory/scripts/rollout_cursor_hooks.py
+python3 ~/code/arango-shared-memory/scripts/rollout_cursor_hooks.py --apply
 ```
 **Do NOT run `install.py` / `setup_*` / `phase*` against the shared cluster** — those stand up a *new*
 backend, not join an existing one. Full walkthrough: **[ONBOARDING.md](ONBOARDING.md)**.
@@ -99,7 +106,8 @@ poetry run python ~/code/arango-shared-memory/scripts/install.py
   the vector flag enabled server-side).
 
 `verify.py` (either path) checks connectivity, collections, indexes, a round-trip, and prints the
-**adoption + read-path scorecard** (patterns, projects, drift, searches, hit rate). Exit 0 = healthy.
+**adoption + read-path scorecard** (patterns, projects, drift, interactive searches, automatic
+recalls, zero-read projects, hit rate). Exit 0 = healthy.
 
 ## Repository layout
 ```
@@ -126,9 +134,10 @@ scripts/
   add_teammate.py              Per-developer least-privilege users (also drives attribution)
   install_visualizer.py        Graph Visualizer theme/queries/canvas actions for memory_graph
   bootstrap_project.sh         Scaffold a project from templates/
+  rollout_cursor_hooks.py      Merge-refresh Cursor + shared Claude hooks across local projects
 eval/golden_queries.json       The golden query set (grow it as important patterns are saved)
-templates/                     Source of truth for CLAUDE.md, hooks (session recall, drift
-                               queue, capture miner, stop gate), and the skills incl.
+templates/                     Source of truth for CLAUDE.md, Cursor/Claude hooks (session recall,
+                               drift queue, capture miner, apply attribution, stop gate), and skills incl.
                                check_evidence.py
 tests/                         DB-free test suite: python3 -m unittest discover tests
 ```

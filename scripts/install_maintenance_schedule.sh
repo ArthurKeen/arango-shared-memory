@@ -12,7 +12,7 @@
 #   scripts/install_maintenance_schedule.sh [--interval weekly|daily] \
 #       [--server-dir ~/code/arango-solutions-mcp-server] [--with-llm] [--uninstall]
 #
-# The job runs inside the MCP server's Poetry env (which has python-arango) and
+# The job runs with the MCP server's in-project virtualenv (which has python-arango) and
 # logs to ~/.arango-shared-memory/maintain.log.
 
 set -euo pipefail
@@ -39,7 +39,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-CMD="cd $SERVER_DIR && poetry run python $SCRIPT_DIR/maintain.py $WITH_LLM >> $LOG 2>&1"
+PYTHON="$SERVER_DIR/.venv/bin/python"
+CMD="$PYTHON $SCRIPT_DIR/maintain.py $WITH_LLM >> $LOG 2>&1"
 
 if [ "$(uname)" != "Darwin" ]; then
   if [ "$UNINSTALL" -eq 1 ]; then
@@ -62,7 +63,16 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 [ -d "$SERVER_DIR" ] || { echo "error: server dir not found: $SERVER_DIR (use --server-dir)" >&2; exit 1; }
+[ -x "$PYTHON" ] || {
+  echo "error: $PYTHON not found; run 'poetry install' in $SERVER_DIR first" >&2
+  exit 1
+}
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST")"
+
+LLM_ARG=""
+if [ -n "$WITH_LLM" ]; then
+  LLM_ARG="    <string>--with-llm</string>"
+fi
 
 if [ "$INTERVAL" = "daily" ]; then
   CALENDAR="    <dict>
@@ -86,9 +96,9 @@ cat > "$PLIST" <<PLIST_EOF
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>-lc</string>
-    <string>$CMD</string>
+    <string>$PYTHON</string>
+    <string>$SCRIPT_DIR/maintain.py</string>
+$LLM_ARG
   </array>
   <key>StartCalendarInterval</key>
 $CALENDAR

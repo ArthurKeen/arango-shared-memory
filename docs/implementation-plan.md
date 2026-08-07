@@ -65,14 +65,24 @@ These once-deferred server-side items are now implemented in `arango-solutions-m
 - `pattern-search` now takes an optional **`memory_type` filter parameter** (validated;
   ANDed onto the validity filter in every mode).
 
+## Round 3 hook enforcement — SHIPPED
+
+- Cursor project hooks mirror SessionStart recall, file-edit drift queuing, and the
+  one-pass Stop gate. `rollout_cursor_hooks.py` merges them into existing hook configs
+  without deleting unrelated entries.
+- Cursor and Claude track keys surfaced by `pattern-search`; the Stop gate requests one
+  attribution pass if `pattern-applied` was omitted. This is intentionally hook-assisted,
+  not blind automatic application: a viewed result is not necessarily reused.
+- SessionStart recalls are logged separately from interactive searches.
+
 ## Out of scope here (tracked, not silently dropped)
 
 - **Automated remediation of drift gaps** — deliberately excluded; §13 of the PRD defines
   the gates any future version must satisfy.
 - **Windows scheduler support** for maintenance (launchd + cron covered).
-- **Automatic `pattern-applied` capture** — reuse is still recorded by the agent per the
-  skill protocol (now MANDATORY in CLAUDE.md); a server/hook-driven capture is a candidate
-  if the surfaced→applied metric stays low.
+- **Fully inferred `pattern-applied` writes** — deliberately excluded because neither the
+  server nor a deterministic hook can prove that a surfaced result influenced the solution.
+  The shipped attribution gate prompts the agent once and records only explicit reuse.
 
 ## Verification
 

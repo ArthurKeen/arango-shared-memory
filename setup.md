@@ -24,13 +24,17 @@ This system gives Claude Code (and Cursor) three capabilities across all your pr
 3. **Automatic recall + capture** — a SessionStart hook injects a per-project digest at session
    start: open drift gaps, last sync, PRD staleness (content hash vs the stored baseline), the
    project's feedback memories, and the top-ranked relevant patterns. At session end a Stop hook
-   mines the transcript for **candidate memories** (a command that failed then later succeeded;
-   user corrections) into `.pattern-capture-queue/` — the next digest nags until `/pattern-save`
+   mines the transcript for **candidate memories** (a Bash/MCP tool that failed then later
+   succeeded; user corrections) into `.pattern-capture-queue/` — the next digest nags until `/pattern-save`
    triages them (LLM judgment saves the real lessons, deletes the noise; the hook itself never
-   writes to shared memory). Fail-open: an unreachable database never breaks a session.
+   writes to shared memory). Cursor-native hooks mirror the digest, edit queue, and Stop gate.
+   Both clients track searched keys and request one `pattern-applied` attribution pass when
+   needed, without treating every surfaced result as used. Fail-open: an unreachable database
+   never breaks a session.
 4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
-   project (including `prd_sha256`); `search_log` records every search (query, hit, project,
-   **who**); every write is stamped with its author (`saved_by`, `detected_by`/`closed_by`, a
+   project (including `prd_sha256`); `search_log` records interactive searches and automatic
+   SessionStart recalls as distinct modes (query, hit, project, **who**); every write is stamped
+   with its author (`saved_by`, `detected_by`/`closed_by`, a
    capped `apply_log` of who applied what) from the developer's own scoped DB account — so reuse
    and contribution are measurable per person, not assumed.
 
@@ -155,15 +159,19 @@ This installs (from `templates/`, filling placeholders) and git-ignores the pers
 - `.claude/settings.json` — hook wiring + permission allowlist
 - `.claude/hooks/` — `session_recall.py` (SessionStart digest), `drift_queue.py` (PostToolUse:
   queues code AND PRD edits), `drift_stop_gate.sh` (Stop gate: blocks once while the queue is
-  non-empty; all three are self-configuring from CLAUDE.md and fail open)
+  non-empty), and `pattern_apply_tracker.py` (searched→applied attribution; all hooks fail open)
 - `.claude/skills/{prd-sync,pattern-save,pattern-search}/` — the skills (current versions),
   including `prd-sync/check_evidence.py` (the mechanical evidence gate)
-- `.cursor/rules/workflow.mdc` — the Cursor equivalent (Cursor doesn't run the hooks)
+- `.cursor/rules/workflow.mdc` — Cursor workflow guidance
+- `.cursor/hooks.json` + `.cursor/hooks/` — Cursor-native digest, drift queue, apply-attribution,
+  and one-pass Stop enforcement
 
 Re-running is safe: without `--force` existing files are skipped; with `--force`, byte-identical
 files are skipped (`unchanged`) and any file that actually changes is first backed up as
 `<file>.pre-update.<timestamp>` — the undo for local customizations (e.g. `permissions.allow`
 entries you added to `settings.json`), since `.claude/` is gitignored and has no git history.
+For existing bootstrapped projects, use `scripts/rollout_cursor_hooks.py` (dry-run by default,
+`--apply` to merge-refresh); unrelated Cursor/Claude hook entries are preserved.
 Then create the project's `PRD.md` and run
 `/prd-sync` to establish its drift baseline. Because `arangodb-memory-mcp` is registered *globally*,
 every bootstrapped project can reach shared memory with no per-project MCP wiring.
