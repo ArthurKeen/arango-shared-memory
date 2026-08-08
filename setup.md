@@ -118,8 +118,8 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
 (`~/.cursor/mcp.json`), under a top-level `"mcpServers"` key:
 ```json
 {
-  "command": "poetry",
-  "args": ["run", "python", "main.py"],
+  "command": "bash",
+  "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/arangodb-mcp"],
   "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
   "env": {
     "ARANGO_HOSTS": "https://<shared-cluster-host>:8529",
@@ -127,6 +127,8 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
     "ARANGO_ROOT_PASSWORD": "<your password — DO NOT COMMIT>",
     "ARANGO_DEFAULT_DB_NAME": "memory",
     "ARANGO_VERIFY_SSL": "true",
+    "MCP_PROFILE": "developer",
+    "MCP_TOOLSETS": "graph,search",
     "OPENAI_API_KEY": "sk-...your own key...",
     "EMBEDDING_MODEL": "text-embedding-3-small"
   }
@@ -135,9 +137,20 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
 - Values above are for **joining the shared cluster** (the common case). For a **new local backend**
   instead, use `"ARANGO_HOSTS": "http://localhost:8539"`, `root` / `openSesame`, and omit `ARANGO_VERIFY_SSL`.
 - `OPENAI_API_KEY` enables hybrid/graph. Omit it to run keyword-only. **Never commit this file / key.**
-- If `poetry` isn't on the launcher PATH, use the absolute path (`which poetry`) or point `command` at
-  `.venv/bin/python` with `args: ["main.py"]`.
-- Reload Cursor / restart Claude Code so the tools load.
+- `arangodb-mcp` is the server's console command (created by `poetry install` in STEP 1). The `bash -c`
+  wrapper avoids depending on `poetry` being on the launcher's PATH. If you installed the package
+  system-wide, `"command": "arangodb-mcp"` with no `args` also works.
+- **`MCP_PROFILE` is required for shared memory.** It defaults to `readonly`, whose tool surface
+  excludes the whole `memory` category (`pattern-search`, `save-pattern`, `pattern-applied`,
+  `save-drift-alert`, `embed-*`) *and* all writes. `developer` = read + write + memory +
+  transaction, with no admin rights — the right level for using shared memory. `MCP_TOOLSETS`
+  additively adds `graph` (traversals) and `search` (vector/hybrid). Profiles: `readonly` |
+  `developer` | `operator` (+backup) | `admin` (everything).
+- **After a `git pull` of the server, re-check these two lines.** Configs that launch `python
+  main.py` predate the `src/arangodb_mcp` packaging change; that file is gone, so the server
+  starts nothing. Both this and a `readonly` profile fail the same way: because the skills fail
+  open, the only symptom is the memory tools quietly disappearing.
+- Reload Cursor / restart Claude Code so the tools load — a running client keeps its dead connection.
 
 ## STEP 4 — Verify
 ```bash
@@ -285,7 +298,7 @@ separate local `memory` DB and switch to the shared one via env — two database
 | Session end blocked by the drift gate | `.prd-drift-queue/` non-empty | run `/prd-sync` (clears the queue); it blocks at most once per stop; per-repo bypass: `touch .no-drift-gate` |
 | Insert rejected: "schema validation failed" | document violates the collection's JSON schema (missing project_id, bad enum value) | fix the document — the schema is the guard, not the bug; rules live in `setup_schema.py` |
 | `prd_patches`/`sync_observations` missing | database predates the migration round | `poetry run python .../scripts/migrate.py` |
-| MCP server won't start | `poetry` not on the launcher PATH | use absolute poetry path, or `command: .venv/bin/python`, `args: ["main.py"]` |
+| MCP server won't start / memory tools silently missing | config launches the removed `main.py` (pre-`src/arangodb_mcp` packaging), or `poetry` isn't on the launcher PATH | point the launcher at `.venv/bin/arangodb-mcp` (see STEP 3), then fully restart the client — a running one keeps its dead connection |
 | `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
 | `ERR 1579 access after data-modification` | one AQL reads a collection after modifying it | split into separate statements |
 | Saving a pattern fails: `Expecting type Array` | inserting into a vector-indexed collection without the embedding | use `save-pattern` (embeds then inserts); don't insert-then-embed |

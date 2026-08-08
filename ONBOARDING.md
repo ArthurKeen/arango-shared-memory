@@ -56,8 +56,8 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
 ```json
 {
   "arangodb-memory-mcp": {
-    "command": "poetry",
-    "args": ["run", "python", "main.py"],
+    "command": "bash",
+    "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/arangodb-mcp"],
     "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
     "env": {
       "ARANGO_HOSTS": "https://prod.demo.pilot.arango.ai:8529",
@@ -65,6 +65,8 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
       "ARANGO_ROOT_PASSWORD": "<your shared-cluster password — DO NOT COMMIT>",
       "ARANGO_DEFAULT_DB_NAME": "memory",
       "ARANGO_VERIFY_SSL": "true",
+      "MCP_PROFILE": "developer",
+      "MCP_TOOLSETS": "graph,search",
       "OPENAI_API_KEY": "sk-...your own key...",
       "EMBEDDING_MODEL": "text-embedding-3-small"
     }
@@ -72,8 +74,19 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
 }
 ```
 These files live in your home directory and are **not** in any repo — keep the credentials there only.
-Then **reload Cursor / restart Claude Code** so the tools load. (If `poetry` isn't on the launcher PATH,
-use its absolute path from `which poetry`, or `command: .venv/bin/python`, `args: ["main.py"]`.)
+Then **reload Cursor / restart Claude Code** so the tools load.
+
+> **Two settings that fail silently if you get them wrong** — both produce the same symptom
+> (the memory tools simply aren't there, because the skills fail open):
+>
+> 1. `arangodb-mcp` is the server's console command, created by `poetry install` in step 2. Older
+>    configs launched `python main.py`; that file no longer exists after the packaging change, so
+>    a config still pointing at it starts nothing.
+> 2. `MCP_PROFILE` defaults to **`readonly`**, which excludes the entire `memory` tool category —
+>    you'd get search-less, save-less sessions. `developer` is the right profile for using shared
+>    memory (read + write, no admin); `graph,search` adds traversal and vector/hybrid search.
+>
+> If your tools vanish after a `git pull` of the server, check these two first.
 
 ## 4. Verify you're connected to the shared memory
 ```bash
