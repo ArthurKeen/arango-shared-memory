@@ -1,0 +1,39 @@
+name: CI
+
+# The test suite is stdlib-only `unittest` by design (the project-side hooks and
+# check_evidence.py run on teammate machines without a venv), so CI needs no
+# dependency install and no ArangoDB service. Tests that require a live database
+# or the MCP server checkout skip themselves — see tests/test_eval_aql_sync.py.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Byte-compile every module
+        # Catches syntax errors in scripts/ and the templates/ payloads, which the
+        # unit tests do not all import.
+        run: python -m compileall -q scripts templates tests eval
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
