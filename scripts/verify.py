@@ -13,9 +13,14 @@ Connection settings are resolved in this order (first wins):
      (or ~/.claude.json) -- so it uses the exact same target as the MCP server.
   3. Defaults: http://localhost:8539 / root / (no password) / memory
 
-Usage (via the server's Poetry env, which has python-arango):
+Also probes MCP LIVENESS: it launches the configured `arangodb-memory-mcp` server
+and asserts the shared-memory tools are actually exposed. Every other check here
+talks to ArangoDB directly, so without this a dead or `readonly`-profiled server
+reports perfectly healthy while agents have no memory at all. Skip with --no-mcp.
+
+Usage (via the server's virtualenv, which has python-arango):
     cd ~/code/arango-solutions-mcp-server
-    poetry run python ~/code/arango-shared-memory/scripts/verify.py
+    .venv/bin/python ~/code/arango-shared-memory/scripts/verify.py [--no-mcp]
 
 Exit code 0 = all checks passed, 1 = a check failed, 2 = python-arango missing.
 """
@@ -92,6 +97,113 @@ def _from_mcp_config(key: str):
 
 def resolve(key: str, default: str) -> str:
     return os.environ.get(key) or _from_mcp_config(key) or default
+
+
+# --- MCP liveness ---------------------------------------------------------
+# Every other check here talks to ArangoDB DIRECTLY (python-arango), which means
+# they all pass while the MCP server — the only path an agent actually uses — is
+# dead, mis-launched, or under-profiled. That blind spot has caused three
+# multi-day silent outages: an AQL reserved-word parse error that made the
+# SessionStart digest inert, the removal of the `main.py` entry point that MCP
+# configs launched, and MCP_PROFILE defaulting to `readonly` (which drops every
+# write tool AND the whole `memory` category). All three reported ALL CHECKS
+# PASSED. Because the skills are fail-open by design, total unavailability looks
+# exactly like "nothing to report" — so it must be probed explicitly.
+MEMORY_TOOLS = ["pattern-search", "save-pattern", "pattern-applied", "save-drift-alert"]
+MCP_TIMEOUT = 45  # generous: the server opens a real ArangoDB connection at startup
+
+
+def _mcp_server_entry():
+    """The full `arangodb-memory-mcp` client config (command/args/env), or None."""
+    for path in ["~/.cursor/mcp.json", "~/.claude.json"]:
+        p = os.path.expanduser(path)
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p) as f:
+                entry = json.load(f)["mcpServers"][SERVER_ID]
+            if entry.get("command"):
+                return entry, path
+        except (KeyError, json.JSONDecodeError, OSError):
+            continue
+    return None, None
+
+
+def check_mcp_liveness(c) -> None:
+    """Launch the configured MCP server and assert the memory tools are exposed.
+
+    Deliberately uses the client config verbatim — the same command, args and env
+    an agent would get — so this catches launch-command drift and profile
+    misconfiguration, not just "is the database up".
+    """
+    import subprocess
+
+    entry, src = _mcp_server_entry()
+    if not entry:
+        c.info("MCP liveness: no 'arangodb-memory-mcp' client config found — skipped "
+               "(register it per setup.md STEP 3 to enable this check)")
+        return
+
+    env = {**os.environ, **{k: str(v) for k, v in (entry.get("env") or {}).items()}}
+    cmd = [entry["command"], *(entry.get("args") or [])]
+    # initialize -> initialized -> tools/list, written in one shot; the server
+    # processes them in order and we parse whatever JSON-RPC lines come back.
+    stdin = "".join(json.dumps(m) + "\n" for m in (
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+         "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                    "clientInfo": {"name": "verify.py", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    ))
+    try:
+        proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True,
+                              timeout=MCP_TIMEOUT, cwd=entry.get("cwd") or None, env=env)
+    except subprocess.TimeoutExpired:
+        c.fail(f"MCP server did not respond within {MCP_TIMEOUT}s (config: {src})")
+        return
+    except OSError as exc:
+        c.fail(f"MCP server could not be launched ({exc}) — check 'command' in {src}")
+        return
+
+    responses = {}
+    instructions = ""
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("id") in (1, 2):
+            responses[msg["id"]] = msg
+        if msg.get("id") == 1:
+            instructions = ((msg.get("result") or {}).get("instructions") or "")
+
+    if 1 not in responses:
+        tail = " | ".join((proc.stderr or "").strip().splitlines()[-2:])[:220]
+        c.fail(f"MCP server failed to start or complete a handshake (config: {src})"
+               + (f" — stderr: {tail}" if tail else ""))
+        return
+
+    tools = [t.get("name") for t in ((responses.get(2, {}).get("result") or {}).get("tools") or [])]
+    if not tools:
+        c.fail("MCP server started but returned no tools from tools/list")
+        return
+    c.ok(f"MCP server reachable — {len(tools)} tool(s) exposed")
+
+    for line in instructions.splitlines():
+        s = line.strip()
+        if s.startswith("Active profile:") or s.startswith("Additive toolsets:"):
+            c.info(s)
+
+    missing = [t for t in MEMORY_TOOLS if t not in tools]
+    if missing:
+        c.fail(f"memory tools NOT exposed via MCP: {missing} — the agent cannot use shared "
+               f"memory. Most likely MCP_PROFILE is 'readonly' (it excludes the whole "
+               f"'memory' category); set MCP_PROFILE=developer in {src}, then restart the client")
+    else:
+        c.ok(f"all {len(MEMORY_TOOLS)} shared-memory tools exposed via MCP")
 
 
 def main() -> int:
@@ -353,6 +465,14 @@ def main() -> int:
             print(f"  retrieval eval ({last['run_at'][:10]}, n={last['n_queries']}): {summary}")
         else:
             print(f"      {YELLOW}(no eval runs yet — run scripts/eval_retrieval.py){RESET}")
+
+    # --- MCP liveness (the agent-facing path; see check_mcp_liveness) ---
+    print("\nMCP liveness  (the path agents actually use — DB checks above cannot see it)")
+    print("-" * 64)
+    if "--no-mcp" in sys.argv:
+        c.info("skipped (--no-mcp)")
+    else:
+        check_mcp_liveness(c)
 
     # --- summary ---
     print("\n" + "=" * 64)
