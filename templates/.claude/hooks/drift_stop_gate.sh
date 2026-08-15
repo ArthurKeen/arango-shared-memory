@@ -30,7 +30,9 @@ case "$COUNT" in ''|*[!0-9]*) exit 0;; esac
 # "0" (the "(including 0\n0 PRD edit(s))" glitch). tr yields a single clean integer.
 PRD_COUNT=$(ls .prd-drift-queue 2>/dev/null | grep -c '^prd_' | tr -d ' \n')
 
-APPLY_PENDING=$(printf '%s' "$INPUT" | python3 -c '
+# Emits "<pending> <session-id> <comma-joined pending keys>" so the block message can
+# name the exact command that resolves it. Fails open to "0 - -" like everything else.
+APPLY_INFO=$(printf '%s' "$INPUT" | python3 -c '
 import json, os, re, sys
 try:
     payload = json.load(sys.stdin)
@@ -38,16 +40,27 @@ try:
     sid = re.sub(r"[^A-Za-z0-9_.-]", "-", str(raw))[:120]
     with open(os.path.join(".claude", ".shared-memory-sessions", sid + ".json")) as fh:
         state = json.load(fh)
-    print(len([k for k in state.get("surfaced_keys", [])
-               if k not in set(state.get("applied_keys", []))]))
+    # A surfaced key is RESOLVED when it was either applied (reuse attributed) or
+    # explicitly dismissed (reviewed, deliberately not reused). Counting only
+    # applied_keys made this gate unsatisfiable: it demanded that every surfaced key
+    # be applied while its own message forbids marking every result as applied. The
+    # third state is recorded by .claude/hooks/dismiss_surfaced.py — never by
+    # inventing apply events, which would inflate usage_count and corrupt the
+    # learned success-rate ranking for everyone else.
+    resolved = set(state.get("applied_keys", [])) | set(state.get("dismissed_keys", []))
+    pending = [k for k in state.get("surfaced_keys", []) if k not in resolved]
+    print(len(pending), sid, ",".join(pending) or "-")
 except Exception:
-    print(0)' 2>/dev/null || echo 0)
+    print("0 - -")' 2>/dev/null || echo "0 - -")
+APPLY_PENDING=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f1)
+APPLY_SID=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f2)
+APPLY_KEYS=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f3)
 case "$APPLY_PENDING" in ''|*[!0-9]*) APPLY_PENDING=0;; esac
 [ "$COUNT" -eq 0 ] && [ "$APPLY_PENDING" -eq 0 ] && exit 0
 
-python3 - "$COUNT" "$PRD_COUNT" "$APPLY_PENDING" 2>/dev/null <<'PY' || exit 0
+python3 - "$COUNT" "$PRD_COUNT" "$APPLY_PENDING" "$APPLY_SID" "$APPLY_KEYS" 2>/dev/null <<'PY' || exit 0
 import json, sys
-count, prd, pending = sys.argv[1], sys.argv[2], sys.argv[3]
+count, prd, pending, sid, keys = (sys.argv + ["", ""])[1:6]
 extra = f" (including {prd} PRD edit(s))" if prd not in ("", "0") else ""
 parts = []
 if count != "0":
@@ -56,9 +69,14 @@ if count != "0":
                  "If a sync is genuinely not wanted for this repository, create a "
                  ".no-drift-gate file to bypass this gate.")
 if pending != "0":
-    parts.append("[SHARED-MEMORY APPLY GATE] A pattern-search ran but reuse attribution is "
-                 "incomplete. Call pattern-applied with only the key(s) actually used; "
-                 "if none were used, state that explicitly. Never mark every result as applied.")
+    # Both halves must be actionable: prose ("state that explicitly") has no effect on
+    # the state file, so a message that only says that leaves the gate unsatisfiable.
+    spaced = keys.replace(",", " ") if keys not in ("", "-") else ""
+    parts.append(f"[SHARED-MEMORY APPLY GATE] {pending} surfaced pattern(s) unresolved. "
+                 "For any result that informed the solution, call pattern-applied with only "
+                 "those key(s). For the rest — reviewed and deliberately not reused — record "
+                 f"that decision: python3 .claude/hooks/dismiss_surfaced.py {sid} {spaced} "
+                 "Never mark every result as applied.")
 print(json.dumps({
     "decision": "block",
     "reason": " ".join(parts),

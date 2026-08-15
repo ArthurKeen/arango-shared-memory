@@ -27,7 +27,14 @@ CURSOR_HOOK_FILES = (
     "shared_memory_apply_tracker.py",
     "shared_memory_stop_gate.py",
 )
-CLAUDE_HOOK_FILES = ("session_recall.py", "drift_stop_gate.sh", "pattern_apply_tracker.py")
+# dismiss_surfaced.py must roll out with drift_stop_gate.sh: the gate's block message
+# names it, so shipping the gate alone would point projects at a missing script.
+CLAUDE_HOOK_FILES = (
+    "session_recall.py",
+    "drift_stop_gate.sh",
+    "pattern_apply_tracker.py",
+    "dismiss_surfaced.py",
+)
 IGNORE_LINES = (
     ".cursor/.shared-memory-sessions/",
     ".cursor/hooks.json.pre-update.*",

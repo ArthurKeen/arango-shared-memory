@@ -26,7 +26,10 @@ This project uses autonomous drift detection with enforcement. Registered automa
    `memory_type` filter (`feedback` for standing guidance, `pattern` for reusable solutions) when
    the intent is known. If you apply any surfaced pattern, immediately record it with
    `pattern-applied` (the reuse signal is how good patterns rise and their authors get credit —
-   do not defer it to session end).
+   do not defer it to session end). Most hits of an 8-result search are *not* reused; record that
+   review with `python3 .claude/hooks/dismiss_surfaced.py <session_id> <key> ...`, which is local
+   audit state only. Never mark a result applied just to clear the gate — that inflates
+   `usage_count` and corrupts success-rate ranking for everyone else.
 2. After fixing a drift gap or discovering a reusable technique: run `/pattern-save`.
 3. When the user corrects you or confirms an approach worked: save it as a `feedback`
    memory (with why + how_to_apply) so the guidance persists across sessions.

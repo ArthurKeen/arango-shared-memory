@@ -125,6 +125,10 @@ place ".claude/hooks/drift_queue.py" 0
 place ".claude/hooks/drift_stop_gate.sh" 0
 place ".claude/hooks/capture_candidates.py" 0
 place ".claude/hooks/pattern_apply_tracker.py" 0
+# Ships alongside the stop gate on purpose: the gate's block message names this
+# script, so a project that got the gate without it would be told to run something
+# that is not there.
+place ".claude/hooks/dismiss_surfaced.py" 0
 place ".claude/skills/prd-sync/SKILL.md" 0
 place ".claude/skills/prd-sync/check_evidence.py" 0
 place ".claude/skills/pattern-save/SKILL.md" 0

@@ -22,6 +22,7 @@ SESSION_RECALL = os.path.join(HOOKS, "session_recall.py")
 CLAUDE_APPLY_TRACKER = os.path.join(HOOKS, "pattern_apply_tracker.py")
 CURSOR_APPLY_TRACKER = os.path.join(CURSOR_HOOKS, "shared_memory_apply_tracker.py")
 CURSOR_STOP_GATE = os.path.join(CURSOR_HOOKS, "shared_memory_stop_gate.py")
+DISMISS = os.path.join(HOOKS, "dismiss_surfaced.py")
 
 CLAUDE_MD = """# PROJECT: Demo
 - PROJECT_ID: demo-api
@@ -152,16 +153,46 @@ class TestStopGate(TmpProject):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(proc.stdout.strip(), "")
 
-    def test_pending_pattern_attribution_blocks_once(self):
+    def _state(self, sid="session-1", **state):
         state_dir = os.path.join(self.cwd, ".claude", ".shared-memory-sessions")
-        os.makedirs(state_dir)
-        with open(os.path.join(state_dir, "session-1.json"), "w") as fh:
-            json.dump({"surfaced_keys": ["p1"], "applied_keys": []}, fh)
+        os.makedirs(state_dir, exist_ok=True)
+        with open(os.path.join(state_dir, f"{sid}.json"), "w") as fh:
+            json.dump(state, fh)
+
+    def test_pending_pattern_attribution_blocks_once(self):
+        self._state(surfaced_keys=["p1"], applied_keys=[])
         proc = self.run_gate({"session_id": "session-1"})
         self.assertEqual(proc.returncode, 0)
         out = json.loads(proc.stdout)
         self.assertEqual(out["decision"], "block")
-        self.assertIn("reuse attribution is incomplete", out["reason"])
+        self.assertIn("1 surfaced pattern(s) unresolved", out["reason"])
+
+    def test_dismissed_keys_resolve_the_apply_gate(self):
+        # The regression this suite missed: with only applied_keys counted, an 8-result
+        # search where 2 were reused left 6 pending forever, so the gate could never be
+        # satisfied without marking every result applied — which its own message forbids.
+        surfaced = [f"p{i}" for i in range(1, 9)]
+        self._state(surfaced_keys=surfaced, applied_keys=["p1", "p2"],
+                    dismissed_keys=surfaced[2:])
+        proc = self.run_gate({"session_id": "session-1"})
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_partial_dismissal_still_blocks(self):
+        # Dismissal must resolve only what it names; one unreviewed key still gates.
+        surfaced = [f"p{i}" for i in range(1, 9)]
+        self._state(surfaced_keys=surfaced, applied_keys=["p1"], dismissed_keys=surfaced[1:7])
+        proc = self.run_gate({"session_id": "session-1"})
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("1 surfaced pattern(s) unresolved", out["reason"])
+
+    def test_block_message_names_a_runnable_command(self):
+        # Prose ("state that explicitly") has no effect on the state file, so the message
+        # must name the tool and the exact keys, or the gate stays unsatisfiable in practice.
+        self._state(surfaced_keys=["p1", "p2"], applied_keys=["p1"])
+        out = json.loads(self.run_gate({"session_id": "session-1"}).stdout)
+        self.assertIn("dismiss_surfaced.py session-1 p2", out["reason"])
 
 
 class TestCaptureMiner(unittest.TestCase):
@@ -266,8 +297,30 @@ class TestCursorApplyGate(unittest.TestCase):
         }
         self.tracker.update_state(payload)
         message = self.stop.followup(payload)
-        self.assertIn("reuse attribution is incomplete", message)
-        self.assertIn("only the key(s) actually used", message)
+        self.assertIn("1 surfaced pattern(s) unresolved", message)
+        self.assertIn("call pattern-applied with only", message)
+        # Must name a runnable command, not just describe the desired state.
+        self.assertIn("dismiss_surfaced.py conv-2 only-surfaced", message)
+
+    def test_dismissed_keys_resolve_the_cursor_gate(self):
+        # Cursor keeps its session state under .cursor/, so it needs the same
+        # resolved = applied | dismissed arithmetic as the Claude gate.
+        payload = {
+            "conversation_id": "conv-3",
+            "tool_name": "pattern-search",
+            "tool_output": json.dumps({"results": [{"_key": "a"}, {"_key": "b"}]}),
+        }
+        self.tracker.update_state(payload)
+        self.assertIn("2 surfaced pattern(s) unresolved", self.stop.followup(payload))
+
+        path = os.path.join(".cursor", ".shared-memory-sessions", "conv-3.json")
+        with open(path) as fh:
+            state = json.load(fh)
+        state["applied_keys"] = ["a"]
+        state["dismissed_keys"] = ["b"]
+        with open(path, "w") as fh:
+            json.dump(state, fh)
+        self.assertEqual(self.stop.followup(payload), "")
 
     def test_cursor_drift_gate_returns_followup(self):
         os.makedirs(".prd-drift-queue")
@@ -276,6 +329,65 @@ class TestCursorApplyGate(unittest.TestCase):
         message = self.stop.followup({"conversation_id": "conv-3"})
         self.assertIn("2 change(s)", message)
         self.assertIn("1 PRD edit(s)", message)
+
+
+class TestDismissSurfaced(unittest.TestCase):
+    """The third state: reviewed, and deliberately not reused."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.previous = os.getcwd()
+        os.chdir(self.dir.name)
+
+    def tearDown(self):
+        os.chdir(self.previous)
+        self.dir.cleanup()
+
+    def _seed(self, runtime=".claude", sid="s1", **state):
+        d = os.path.join(runtime, ".shared-memory-sessions")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{sid}.json"), "w") as fh:
+            json.dump(state, fh)
+        return os.path.join(d, f"{sid}.json")
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, DISMISS, *args],
+                              capture_output=True, text=True)
+
+    def test_dismissal_records_without_writing_an_apply_event(self):
+        path = self._seed(surfaced_keys=["p1", "p2"], applied_keys=["p1"])
+        proc = self._run("s1", "p2")
+        self.assertEqual(proc.returncode, 0)
+        with open(path) as fh:
+            state = json.load(fh)
+        self.assertEqual(state["dismissed_keys"], ["p2"])
+        # Reuse attribution must remain the sole business of pattern-applied, or
+        # dismissal would inflate usage_count and corrupt success-rate ranking.
+        self.assertEqual(state["applied_keys"], ["p1"])
+
+    def test_refuses_key_never_surfaced(self):
+        self._seed(surfaced_keys=["p1"])
+        proc = self._run("s1", "never-seen")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("Not surfaced", proc.stderr)
+
+    def test_refuses_key_already_applied(self):
+        self._seed(surfaced_keys=["p1"], applied_keys=["p1"])
+        proc = self._run("s1", "p1")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("Already attributed", proc.stderr)
+
+    def test_refuses_when_session_has_no_state(self):
+        proc = self._run("ghost-session", "p1")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("No surfaced state", proc.stderr)
+
+    def test_finds_cursor_state_too(self):
+        # One tool serves both runtimes; Cursor namespaces its state under .cursor/.
+        path = self._seed(runtime=".cursor", sid="conv-9", surfaced_keys=["c1"])
+        self.assertEqual(self._run("conv-9", "c1").returncode, 0)
+        with open(path) as fh:
+            self.assertEqual(json.load(fh)["dismissed_keys"], ["c1"])
 
 
 class TestClaudeApplyTracker(unittest.TestCase):

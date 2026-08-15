@@ -25,6 +25,10 @@ alwaysApply: true
 2. Present the top results (problem, solution, tags, source project) and ask which to apply.
 3. If you apply one or more results, record it with the `pattern-applied` tool
    (pass only the `_key`s actually used).
+4. With `limit: 8`, most results will not be reused — that is the normal outcome, not a
+   failure. Record those with `python3 .claude/hooks/dismiss_surfaced.py <conversation_id>
+   <key> ...` (local audit state; it never writes to `shared_patterns`). Marking a result
+   applied just to clear the Stop gate inflates `usage_count` and corrupts ranking.
 
 ## After solving a reusable problem
 - Offer to save it with the `save-pattern` MCP tool (it embeds the text and inserts the

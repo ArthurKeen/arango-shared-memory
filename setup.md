@@ -29,8 +29,11 @@ This system gives Claude Code (and Cursor) three capabilities across all your pr
    triages them (LLM judgment saves the real lessons, deletes the noise; the hook itself never
    writes to shared memory). Cursor-native hooks mirror the digest, edit queue, and Stop gate.
    Both clients track searched keys and request one `pattern-applied` attribution pass when
-   needed, without treating every surfaced result as used. Fail-open: an unreachable database
-   never breaks a session.
+   needed, without treating every surfaced result as used. A surfaced key is resolved by *either*
+   an apply or an explicit dismissal (`.claude/hooks/dismiss_surfaced.py`, local audit state that
+   never writes to `shared_patterns`) — counting only applies made the gate unsatisfiable, since
+   its own message correctly forbids marking every result as applied. Fail-open: an unreachable
+   database never breaks a session.
 4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
    project (including `prd_sha256`); `search_log` records interactive searches and automatic
    SessionStart recalls as distinct modes (query, hit, project, **who**); every write is stamped
