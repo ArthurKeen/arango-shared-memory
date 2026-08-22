@@ -17,8 +17,15 @@ cross-project capabilities, backed by ArangoDB:
    usable from any project and filterable by `memory_type`. Retrieval is **hybrid** (semantic vector + BM25 keyword, RRF-fused,
    relevance multiplicatively boosted by importance/recency/usage and a learned per-pattern
    success rate) with a **graph** layer whose edge weights learn from real co-application.
-   Ranking quality is **not assumed — it is measured** against a golden query set
-   (`scripts/eval_retrieval.py`; the harness caught a real regression on day one).
+   Ranking quality is **measured, not asserted** — against a golden query set
+   (`scripts/eval_retrieval.py`), which caught a real regression on its first day.
+   **Read the caveat before trusting the number.** The current set is *saturated*:
+   MRR 0.98 / R@5 1.00, **identical across bm25, hybrid, and hybrid+graph**. It
+   therefore cannot distinguish the three modes, and does **not** establish that the
+   hybrid or graph layers earn their place. Rebuilding it — harder queries, per-mode
+   deltas allowed to diverge, and an isolation run that attributes any gain to a
+   named component — is the top-ranked open item in
+   [docs/scorecard.md](docs/scorecard.md) §6.
 3. **Automatic recall, capture, and enforcement** — a SessionStart hook injects a per-project
    digest (open gaps, PRD staleness, feedback memories, top patterns); a PostToolUse hook queues
    drift markers (code *and* PRD edits, incl. MultiEdit/NotebookEdit); a Stop hook mines the
