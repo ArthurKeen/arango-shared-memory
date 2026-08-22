@@ -251,5 +251,15 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except SystemExit:
         raise
-    except Exception:  # noqa: BLE001 - fail open: never break session start
+    except Exception as exc:  # noqa: BLE001 - fail open: never break session start
+        # Fail OPEN, but never fail SILENT. Exiting quietly makes an unreachable
+        # database indistinguishable from "nothing to report" — which is exactly how
+        # three multi-day total outages of this digest went unnoticed, each while
+        # verify.py reported ALL CHECKS PASSED. The session still proceeds normally;
+        # this line is the only thing standing between a dead read path and silence.
+        print(
+            f"[SHARED-MEMORY] Digest unavailable ({type(exc).__name__}: {exc}). "
+            "Memory recall is NOT active for this session — mention this to the user, "
+            "and see scripts/verify.py for the MCP + database liveness probe."
+        )
         raise SystemExit(0)

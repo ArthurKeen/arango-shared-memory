@@ -549,6 +549,16 @@ class TestSessionRecallFailOpen(TmpProject):
         proc = self.run_hook()
         self.assertEqual(proc.returncode, 0)
 
+    def test_unreachable_db_fails_open_but_not_silent(self):
+        # Fail-open must not mean fail-silent. A quiet exit makes a dead read path
+        # indistinguishable from "nothing to report", which is how three multi-day
+        # outages of this digest went unnoticed. The session must still succeed (rc 0)
+        # AND the operator must be told the digest did not run.
+        proc = self.run_hook()
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("[SHARED-MEMORY]", proc.stdout)
+        self.assertIn("NOT active", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

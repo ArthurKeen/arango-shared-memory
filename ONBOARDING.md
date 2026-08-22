@@ -60,7 +60,7 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
     "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/arangodb-mcp"],
     "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
     "env": {
-      "ARANGO_HOSTS": "https://prod.demo.pilot.arango.ai:8529",
+      "ARANGO_HOSTS": "https://prod.demo.pilot.arango.ai",
       "ARANGO_ROOT_USERNAME": "<your shared-cluster username>",
       "ARANGO_ROOT_PASSWORD": "<your shared-cluster password — DO NOT COMMIT>",
       "ARANGO_DEFAULT_DB_NAME": "memory",
