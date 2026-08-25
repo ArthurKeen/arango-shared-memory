@@ -239,11 +239,15 @@ update_data: {
 
 If MCP is unavailable: emit `[PRD-SYNC] ArangoDB unavailable — drift report is local only.` and continue.
 
-### Phase 5 — Clear drift queue
+### Phase 5 — Drift queue: do NOT clear yet (moved to Phase 6c)
 
-```bash
-rm -f .prd-drift-queue/*
-```
+Accepting a patch in Phase 6a **edits the PRD**, and the PostToolUse hook
+(`.claude/hooks/drift_queue.py`) enqueues a `prd_*` marker for every such edit. Clearing
+here therefore re-arms the Stop gate the moment the sync finishes, demanding a fresh
+`/prd-sync` that has nothing new to audit — structurally guaranteed whenever a sync accepts
+at least one patch. Moved to Phase 6c on 2026-08-12 after exactly this loop was observed in
+`domyn-gdelt`: 8 accepted-patch edits, queue cleared in Phase 5, 8 markers re-queued, gate
+fired again with zero code change.
 
 ### Phase 6 — Review PRD patches + propose fixes
 
@@ -262,6 +266,16 @@ audit waiting, and never apply.
 **6b — Fix proposals (optional).** For each MISSING requirement, propose a concrete
 implementation: which file, what function/class/middleware, any dependency changes.
 Do not implement without user confirmation.
+
+**6c — Clear the drift queue (must be the last step).** Only after every accepted patch has
+been written to disk:
+
+```bash
+rm -f .prd-drift-queue/*
+```
+
+If the sync is abandoned before this point the queue survives **by design** — the audit did
+not finish, so the gate should still fire. Do not clear it early to silence the gate.
 
 ---
 
