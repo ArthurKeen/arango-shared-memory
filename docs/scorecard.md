@@ -1,7 +1,10 @@
 # System Scorecard — arango-shared-memory
 
-_Last updated: 2026-08-19 (round 5: the apply gate's inflation mechanism was found and removed —
-it was mathematically unsatisfiable, so the only way to clear it was the dishonesty its own
+_Last updated: 2026-08-25 (round 5 + addenda: see §2, §3 caveat 1, §4 and §6.8 — a
+delivery-path defect meant three skill fixes never reached 28-31 projects, which bears directly
+on the funnel figure. Original round-5 body below unchanged.
+Round 5: the apply gate's inflation mechanism was found and removed — it was
+mathematically unsatisfiable, so the only way to clear it was the dishonesty its own
 message forbade. Engineering quality improved materially: CI, a license, and the test gap that
 hid the defect. No post-fix telemetry exists yet). Method: static review of `templates/`,
 `scripts/`, `docs/PRD.md`, tests, the `arango-solutions-mcp-server` memory tools, plus live
@@ -33,7 +36,7 @@ can be trusted, and it should be expected to look *worse*.
 |---|---|---|---|
 | PRD requirement coverage | A− | = | §3 retrieval fully IMPLEMENTED (superseded hard-excluded; memory_type first-class + filter) |
 | Live health (prod) | A− | = | verify.py all-green incl. MCP liveness; two open warnings (1 deferred embedding, 7 patches awaiting review) |
-| Adoption & value (read-path) | B− | ↓ | volume up (127 recalls, 80 searches, 91 applies, 20 projects reading) but conversion flat at 44%, still **one** human, and the inflation is now confirmed rather than suspected |
+| Adoption & value (read-path) | B− | ↓ | volume up (127 recalls, 80 searches, 91 applies, 20 projects reading) but conversion flat at 44%, still **one** human, and the figure was measured under **two** independent defects — the gate compelling attribution, and Phase 4 missing from the deployed skill in 28/31 projects so the protocol never asked for it (§3 caveat 1, §6.8) |
 | **Metric integrity** | **C** | **new** | the apply funnel's inflation mechanism is identified and removed, but every historical figure was produced under it and no post-fix data exists yet |
 | Engineering quality | A | ↑ | 66 DB-free tests (2 skipped, was 57); CI matrix on Python 3.11–3.14 all green; MIT licensed; the missing allow-path coverage that hid the gate defect is closed |
 | Reliability / robustness | A | = | Cursor/Claude parity maintained through the gate fix (the Cursor gate carried the identical defect); merge-safe rollout to 31 repos; separate recall telemetry |
@@ -166,6 +169,15 @@ review** (up from 1), 74 accepted. Two warnings the run surfaced:
 The review backlogs (148 alerts, 63 observations, 7 patches) are growing faster than they are
 being triaged. That is a capacity signal, not a correctness one, but it compounds.
 
+**Caveat added 2026-08-25 on the 207 closed alerts.** Closure requires evidence that passes
+`check_evidence.py`, and in 28 projects that gate was doing **whole-file** term matching rather
+than line-local (§6.8) — a requirement could reach IMPLEMENTED with a `file:line` citation
+pointing anywhere in the file so long as the term appeared somewhere in it. One project
+(`contextual-data-fabric`) had no `check_evidence.py` at all, so its claims were never
+mechanically verified. The closed population is therefore softer than the count suggests. This
+repo is unaffected: it runs the template skills directly rather than a bootstrapped copy, so its
+own audits always used the line-local gate.
+
 ## 3. Adoption & value — the read-path (moving fast; read the caveats)
 
 | Metric | Round 4 (08-13) | Round 5 (08-19) |
@@ -191,6 +203,19 @@ being triaged. That is a capacity signal, not a correctness one, but it compound
    implausible for clean reuse. **Every number in this table predates the 08-18 fix**, so the
    conversion figure still carries the inflation. Round 6 should be expected to show applies
    *drop*; that will be the inflation being removed, not a regression.
+
+   **Amended 2026-08-25 — a second, independent defect, and it sharpens the conclusion.**
+   The funnel was not only distorted by the gate. In **28 of 31 projects** the deployed
+   `pattern-search` skill was missing Phase 4 entirely — the MANDATORY apply-attribution step —
+   so the protocol *never asked* the agent to call `pattern-applied` (§6.8). Attribution in
+   those projects therefore happened almost exclusively because the Stop gate demanded it at
+   session end, retrospectively, under duress. That is the condition that manufactures
+   "yes, it worked" answers, and it explains **80 worked / 0 failed** better than the gate
+   alone does. The two defects do not cancel: the missing instruction suppressed voluntary
+   attribution, the gate then compelled it, and what survives is compliance data with no
+   voluntary baseline to compare against. Round 5 concluded the number was inflated; the
+   honest position now is that **44% rests on even less than that** — it was measured with
+   the protocol's own attribution step absent from 90% of the fleet.
 2. **Headcount is still one.** `search_log.by` is `arthur` for **all 80** interactive searches;
    the other 127 reads are `session_recall` (automatic, no human). Applies: `arthur` 82, unattributed 9.
    Writes: `arthur` 70, `pj` 1, unattributed 5. PJ's single contribution remains the PR #1 fix,
@@ -220,6 +245,10 @@ being triaged. That is a capacity signal, not a correctness one, but it compound
   7 patches awaiting review.
 - Registry entries without a matching current checkout still need cleanup before they can produce
   project-local reads.
+- **Undelivered fixes are a standing risk, now mitigated but not eliminated.** Skills and hooks
+  are synced and drift-checked; `templates/CLAUDE.md`, `.cursor/rules/workflow.mdc` and
+  `.claude/settings.json` payloads are only partially covered, and anything added to `templates/`
+  in future is unsynced until it is added to a rollout list. Verify delivery, not just commit.
 - Capture miner correction-detection is still regex-narrow (by design).
 
 ## 5. Recommended next actions
@@ -342,6 +371,30 @@ should be repeated rather than treated as a one-off.
 7. **Namespace collision, cheap to fix only while it is still cheap.** Both projects create a named
    graph `memory_graph`, a `relates_to` edge collection, and a vector index on an `embedding`
    field. Co-deploying them in one database today would have them fighting over object names.
+
+**8. Fixes were not reaching the fleet at all — the delivery path, not the logic, was broken.**
+*(Added 2026-08-25.)* `rollout_cursor_hooks.py` synced hooks and settings and nothing else, while
+`bootstrap_project.sh` places skills once and skips existing files. Skills therefore had **no
+refresh path**, and nothing compared them, so the drift was invisible rather than known-and-
+deferred. Measured before the fix:
+
+| File | Stale in | Consequence |
+|---|---|---|
+| `pattern-search/SKILL.md` | 28 / 31 | Phase 4 absent — the protocol never asked for `pattern-applied`; also no `memory_type` filter and no `hybrid+graph` mode documented |
+| `prd-sync/check_evidence.py` | 28 / 31 | whole-file instead of line-local term matching — the evidence gate was too permissive (fixed in *round 1*, a month earlier, never delivered) |
+| `prd-sync/SKILL.md` | 29 / 32 | the Phase-5 drift-queue loop, and the pre-`AGENTS.md` identity path |
+
+Two compounding causes, both now closed: skills are synced (`CLAUDE_SKILL_FILES`), and
+`discover()` keyed solely on one hook file, which silently excluded the projects most likely to be
+stale — a 32nd project had 8 skills, zero hooks, and no evidence gate whatsoever, and had been
+unreachable by every rollout ever run. All 32 copies now match the templates.
+
+**The generalisable lesson is about delivery, and it is the same shape as the rest of this
+scorecard's findings.** A correct fix, committed a month earlier, sat undelivered in 28 projects
+while the metric it affected was analysed across two rounds. Nothing reported a problem, because
+nothing was measuring whether deployed artifacts matched their source. **A fix that has not been
+verified as delivered has not been made** — and for anything installed by copy, drift detection
+belongs in the installer, not in someone's memory.
 
 **What the comparison did *not* find:** no reason to merge, and no missing capability on the
 enforcement side. The hook/gate layer, evidence verification, and reuse attribution have no
