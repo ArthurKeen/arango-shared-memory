@@ -33,11 +33,19 @@ class TestThemeRuleOperators(unittest.TestCase):
             'theme rule(s) use "==" which silently never match; use "=":\n'
             + "\n".join(offenders))
 
-    def test_status_rules_cover_every_observed_value(self):
-        """open / closed / undocumented all occur in drift_alerts.status."""
-        for value in ("open", "closed", "undocumented"):
-            self.assertIn(f'"{value}"', self.src,
-                          f"no theme rule for drift_alerts.status == {value!r}")
+    def test_no_string_equality_rule_is_shipped(self):
+        """String equality is unresolved; shipping either candidate misleads.
+
+        "==" never matches (all nodes take the base colour). "=" applies the FIRST
+        rule's colour to every node — 366 alerts rendered "open" red when 163 were
+        open. The second is worse: it looks like working colour-coding and is read as
+        data. Numeric ">=" rules are verified and unaffected.
+        """
+        offenders = re.findall(r'_rule\([^)]*"string"[^)]*\)', self.src, re.S)
+        self.assertEqual(
+            offenders, [],
+            "string-equality theme rule(s) shipped before the operator is verified "
+            "empirically via the Visualizer UI:\n" + "\n".join(offenders))
 
     def test_comparison_operators_are_left_alone(self):
         """Numeric rules legitimately use >= — the single-= quirk is equality only."""

@@ -245,19 +245,23 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
             "labelAttribute": "req_id",
             "hoverInfoAttributes": ["requirement", "classification",
                                     "status", "project_id", "gap_description"],
-            "rules": [
-                # Equality is a SINGLE "=". A "==" is accepted silently, renders as a
-                # blank "Select condition" in the Attribute-based editor, and NEVER
-                # matches — so the rule exists in the database and does nothing. This
-                # file shipped "==" and every drift-alert status rule was inert.
-                # (Comparison ops ">=" / "<=" / "<" / ">" are literal and correct.)
-                # Order matters: first match wins.
-                _rule("status", "string", "=", "open", "#e53e3e"),          # unresolved: demand attention
-                _rule("status", "string", "=", "undocumented", "#d69e2e"),  # anomaly: surface it
-                # Closed work is the majority (>55% of alerts). Pale grey so it RECEDES;
-                # a "success green" makes finished work compete with open gaps.
-                _rule("status", "string", "=", "closed", "#cbd5e0"),
-            ],
+            # NO status rules until the string-equality operator is empirically known.
+            # Both candidates are wrong, in opposite and equally misleading ways:
+            #   "==" -> accepted, editor shows a blank "Select condition", never matches;
+            #          every alert falls through to the base colour. (Shipped for weeks.)
+            #   "="  -> accepted, editor shows NO rules at all, and the FIRST rule's colour
+            #          is applied to every node — so all 366 alerts rendered "open" red
+            #          while only 163 were open. Verified live 2026-08-25.
+            # An inert rule is bad; a rule that paints every node the wrong status is worse,
+            # because it looks like working colour-coding and is read as data.
+            # The numeric ">=" rules above ARE verified working (patterns/projects colour
+            # correctly), so this is specific to string equality.
+            # To resolve: author ONE string rule through the Visualizer UI, then read what
+            # the UI wrote into _graphThemeStore. That is how the rest of this schema was
+            # reverse-engineered, and it is the only source of truth for this field.
+            # Until then, status is handled by the "Load: OPEN drift gaps only" panel query,
+            # which filters at load time and needs no theme rule.
+            "rules": [],
         },
     }
     edge_config = {

@@ -166,7 +166,11 @@ Field meanings:
 - **`attributePath`**: the document attribute the rule keys off (e.g. `inferredRisk`, `dataSource`).
 - **`attributeType`**: `"number"` or `"string"`.
 - **`conditionType`**: `"singleValue"` for a single comparison (the only verified type).
-- **`condition.op`**: operator string. **Equality is a single `"="`** — a `"=="` renders as an empty "Select condition" in the Attribute-based tab and the rule never matches (verified against the live Visualizer). Comparison operators are `">="`, `"<="`, `"<"`, `">"`.
+- **`condition.op`**: operator string. Comparison operators `">="`, `"<="`, `"<"`, `">"` are **verified working** on numeric attributes. **String equality is UNRESOLVED — do not ship one.** Both candidates fail, differently and dangerously (both observed live against `memory_graph`, 2026-08-25):
+  - `"=="` — accepted; the Attribute-based tab shows an empty "Select condition"; the rule **never matches**, so every node falls through to the base colour. Looks like "the data has no variation".
+  - `"="` — accepted; the Attribute-based tab shows **no rules at all**; the **first rule's colour is applied to every node**. 366 drift alerts all rendered "open" red when only 163 were open. This is the worse failure: it looks like functioning colour-coding and gets read as data.
+  > An earlier revision of this skill stated that a single `"="` was correct and "verified". It was not — no UI-authored string rule existed anywhere on the cluster to verify against. Treat the numeric operators as evidence-backed and string equality as unknown.
+  > **To resolve:** author one string rule through the live Visualizer UI ("+ New rule" in the Attribute-based tab), save, then read the document back out of `_graphThemeStore` and copy the operator it wrote. Prefer a load-time filter (a `_queries` entry) over a theme rule for status until then.
 - **`condition.right`**: `{ "type": "literal", "value": <number-or-string> }` — the comparison value. Numbers are bare; strings are plain (no quotes).
 - **`condition.config`**: the style applied when the rule matches. Mirrors a node config (`background.color` / `background.iconName`, `labelAttribute`, `hoverInfoAttributes`, nested `rules: []`). `iconName` defaults to `"mdi:table"` even when unused.
 - **`condition.enabledFields`**: which parts of `config` are active — `{ "color": true/false, "icon": …, "labelAttribute": …, "hoverInfoAttributes": … }`. To color only, set `color: true` and the rest `false`.
