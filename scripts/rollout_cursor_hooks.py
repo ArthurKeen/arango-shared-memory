@@ -35,6 +35,19 @@ CLAUDE_HOOK_FILES = (
     "pattern_apply_tracker.py",
     "dismiss_surfaced.py",
 )
+# Skills were never synced by this tool, only placed once by bootstrap_project.sh (which
+# skips existing files). The result was silent permanent drift: as of 2026-08-25, 29 of 32
+# deployed copies of prd-sync/SKILL.md still had the Phase-5 drift-queue loop bug and the
+# pre-AGENTS.md identity path, and one project was 140 lines behind. Unlike hooks these are
+# nested paths, so they carry their subdirectory.
+CLAUDE_SKILL_FILES = (
+    "prd-sync/SKILL.md",
+    "prd-sync/check_evidence.py",
+    "pattern-save/SKILL.md",
+    "pattern-search/SKILL.md",
+    "arangodb-visualizer-customizer/SKILL.md",
+    "arangodb-visualizer-customizer/examples.md",
+)
 IGNORE_LINES = (
     ".cursor/.shared-memory-sessions/",
     ".cursor/hooks.json.pre-update.*",
@@ -140,6 +153,7 @@ def install(project: Path, *, apply: bool, stamp: str) -> tuple[str, list[str]]:
     template_json = _load_json(TEMPLATE_ROOT / "hooks.json")
     claude_dir = project / ".claude"
     claude_hooks_dir = claude_dir / "hooks"
+    claude_skills_dir = claude_dir / "skills"
     claude_settings = claude_dir / "settings.json"
     claude_template_settings = _load_json(CLAUDE_TEMPLATE_ROOT / "settings.json")
 
@@ -165,6 +179,13 @@ def install(project: Path, *, apply: bool, stamp: str) -> tuple[str, list[str]]:
         dst = claude_hooks_dir / name
         if not dst.exists() or src.read_bytes() != dst.read_bytes():
             changes.append(f".claude/hooks/{name}")
+    for rel in CLAUDE_SKILL_FILES:
+        src = CLAUDE_TEMPLATE_ROOT / "skills" / rel
+        dst = claude_skills_dir / rel
+        if not src.exists():
+            continue
+        if not dst.exists() or src.read_bytes() != dst.read_bytes():
+            changes.append(f".claude/skills/{rel}")
 
     gitignore = project / ".gitignore"
     current_ignore = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
@@ -206,6 +227,17 @@ def install(project: Path, *, apply: bool, stamp: str) -> tuple[str, list[str]]:
             _backup(dst, stamp)
         shutil.copy2(src, dst)
         dst.chmod(dst.stat().st_mode | stat.S_IXUSR)
+    for rel in CLAUDE_SKILL_FILES:
+        if f".claude/skills/{rel}" not in changes:
+            continue
+        src = CLAUDE_TEMPLATE_ROOT / "skills" / rel
+        dst = claude_skills_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            _backup(dst, stamp)
+        shutil.copy2(src, dst)
+        # deliberately no chmod +x: skills are documents plus check_evidence.py, which is
+        # invoked as `python3 .../check_evidence.py`, never executed directly.
     if ".gitignore" in changes:
         _append_gitignore(project)
     return "updated", changes

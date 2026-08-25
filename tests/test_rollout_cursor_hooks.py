@@ -72,6 +72,48 @@ class TestRolloutCursorHooks(unittest.TestCase):
             merged["hooks"]["PostToolUse"][1]["matcher"],
         )
 
+    def test_apply_syncs_skills_into_subdirectories(self):
+        """Skills must refresh, and must land in their nested paths.
+
+        This tool synced only hooks for its whole life; bootstrap_project.sh places
+        skills once and skips existing files, so skills drifted silently and
+        permanently — 29 of 32 deployed prd-sync/SKILL.md copies were stale, one by
+        140 lines. Unlike hooks, skills carry a subdirectory, so a flat copy would
+        put them in the wrong place or crash on a missing parent.
+        """
+        stamp = "20260825_000000"
+        status, changes = self.mod.install(self.project, apply=True, stamp=stamp)
+        self.assertEqual(status, "updated")
+
+        skills = self.project / ".claude" / "skills"
+        for rel in self.mod.CLAUDE_SKILL_FILES:
+            src = self.mod.CLAUDE_TEMPLATE_ROOT / "skills" / rel
+            if not src.exists():
+                continue
+            dst = skills / rel
+            self.assertTrue(dst.is_file(), f"{rel} not installed")
+            self.assertEqual(dst.read_bytes(), src.read_bytes(), f"{rel} content differs")
+            self.assertIn(f".claude/skills/{rel}", changes)
+
+        # a second pass must be a no-op, not a re-copy
+        status2, changes2 = self.mod.install(self.project, apply=True, stamp=stamp)
+        self.assertNotIn(status2, ("error",))
+        self.assertEqual([c for c in changes2 if c.startswith(".claude/skills/")], [])
+
+    def test_apply_backs_up_a_drifted_skill_before_overwriting(self):
+        """A stale skill is replaced, but never without a recoverable copy."""
+        stamp = "20260825_000001"
+        rel = "prd-sync/SKILL.md"
+        dst = self.project / ".claude" / "skills" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text("# an old, drifted skill\n", encoding="utf-8")
+
+        self.mod.install(self.project, apply=True, stamp=stamp)
+        backup = dst.with_name(f"{dst.name}.pre-update.{stamp}")
+        self.assertTrue(backup.is_file(), "no backup written before overwrite")
+        self.assertEqual(backup.read_text(encoding="utf-8"), "# an old, drifted skill\n")
+        self.assertNotEqual(dst.read_text(encoding="utf-8"), "# an old, drifted skill\n")
+
     def test_apply_installs_hooks_and_is_idempotent(self):
         status, _ = self.mod.install(self.project, apply=True, stamp="test")
         self.assertEqual(status, "updated")
