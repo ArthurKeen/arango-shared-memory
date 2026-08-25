@@ -246,8 +246,17 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
             "hoverInfoAttributes": ["requirement", "classification",
                                     "status", "project_id", "gap_description"],
             "rules": [
-                _rule("status", "string", "==", "open", "#e53e3e"),
-                _rule("status", "string", "==", "closed", "#48bb78"),
+                # Equality is a SINGLE "=". A "==" is accepted silently, renders as a
+                # blank "Select condition" in the Attribute-based editor, and NEVER
+                # matches — so the rule exists in the database and does nothing. This
+                # file shipped "==" and every drift-alert status rule was inert.
+                # (Comparison ops ">=" / "<=" / "<" / ">" are literal and correct.)
+                # Order matters: first match wins.
+                _rule("status", "string", "=", "open", "#e53e3e"),          # unresolved: demand attention
+                _rule("status", "string", "=", "undocumented", "#d69e2e"),  # anomaly: surface it
+                # Closed work is the majority (>55% of alerts). Pale grey so it RECEDES;
+                # a "success green" makes finished work compete with open gaps.
+                _rule("status", "string", "=", "closed", "#cbd5e0"),
             ],
         },
     }
@@ -262,7 +271,8 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
     return {
         "graphId": graph_id, "name": THEME_NAME,
         "description": "Shared-memory graph: patterns (blue; green=reused, gold=high-importance), "
-                       "projects (purple), drift alerts (red=open, green=closed).",
+                       "projects (purple), drift alerts (red=OPEN, amber=undocumented, "
+                       "pale grey=closed).",
         "isDefault": is_default,
         "nodeConfigMap": node_config, "edgeConfigMap": edge_config,
     }
@@ -354,6 +364,27 @@ def panel_queries(graph_id: str) -> list[dict]:
          "queryText": "FOR e IN pattern_relates_to LIMIT 300 RETURN e"},
         {"name": "Load: drift alerts by project",
          "queryText": "FOR e IN alert_from_project LIMIT 300 RETURN e"},
+        # Status-scoped views. Loading all alerts puts >55% resolved work on the canvas
+        # and buries the open gaps; these keep closed work one deliberate click away.
+        {"name": "Load: OPEN drift gaps only",
+         "queryText": 'FOR e IN alert_from_project\n'
+                      '  LET a = DOCUMENT(e._from)\n'
+                      '  FILTER a.status == "open"\n'
+                      '  LIMIT 400\n'
+                      '  RETURN e'},
+        {"name": "Load: CLOSED gaps (resolved work)",
+         "queryText": 'FOR e IN alert_from_project\n'
+                      '  LET a = DOCUMENT(e._from)\n'
+                      '  FILTER a.status == "closed"\n'
+                      '  LIMIT 400\n'
+                      '  RETURN e'},
+        {"name": "Load: OPEN gaps for one project",
+         "queryText": 'FOR e IN alert_from_project\n'
+                      '  LET a = DOCUMENT(e._from)\n'
+                      '  FILTER a.status == "open" AND a.project_id == @projectId\n'
+                      '  LIMIT 200\n'
+                      '  RETURN e',
+         "bindVariables": {"projectId": "arangodb-data-tools-rs"}},
         {"name": "Load: patterns that address requirements",
          "queryText": "FOR e IN pattern_addresses_requirement LIMIT 200 RETURN e"},
         # Load the WHOLE graph. NB: AQL cannot iterate a LIST of collections
@@ -433,7 +464,12 @@ def main() -> int:
     if "--graph" in sys.argv:
         graph = sys.argv[sys.argv.index("--graph") + 1]
     do_backfill = "--no-backfill" not in sys.argv
-    is_default = "--default" in sys.argv
+    # Apply the theme by DEFAULT. Previously this required an opt-in --default flag,
+    # so a plain run installed the styled theme, then created a bare "Default" theme
+    # with isDefault=True alongside it — leaving the work invisible until someone
+    # noticed and switched themes by hand. An installer that does not apply what it
+    # installs is a footgun; pass --no-default for the old behaviour.
+    is_default = "--no-default" not in sys.argv
 
     hosts = [h.strip() for h in resolve("ARANGO_HOSTS", "http://localhost:8539").split(",") if h.strip()]
     username = resolve("ARANGO_ROOT_USERNAME", "root")
@@ -465,7 +501,10 @@ def main() -> int:
     print("=" * 68)
     print("Done. Reload the Graph Visualizer, then:")
     print(f"  • Legend → select the {THEME_NAME!r} theme"
-          + ("" if is_default else "  (or re-run with --default to auto-apply it)"))
+          + ("  (applied as the default theme)" if is_default
+             else "  — NOT applied: installed with --no-default, so a bare 'Default' "
+                  "theme is still active. Switch themes in the Legend, or re-run "
+                  "without --no-default."))
     print("  • Queries panel → starter graph loads")
     print("  • right-click a node → Canvas Actions → expand")
     return 0

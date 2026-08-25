@@ -1,0 +1,418 @@
+[
+  {
+    "_key": "326352326",
+    "_id": "_graphThemeStore/326352326",
+    "_rev": "_l2EWdaa---",
+    "createdAt": "2026-07-20T22:14:42.158Z",
+    "description": "Default graph theme",
+    "edgeConfigMap": {
+      "pattern_addresses_requirement": {
+        "lineStyle": {
+          "color": "#787878",
+          "thickness": 0.7
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "pattern_from_project": {
+        "lineStyle": {
+          "color": "#787878",
+          "thickness": 0.7
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "pattern_relates_to": {
+        "lineStyle": {
+          "color": "#787878",
+          "thickness": 0.7
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "pattern_supersedes": {
+        "lineStyle": {
+          "color": "#787878",
+          "thickness": 0.7
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "requirement_depends_on": {
+        "lineStyle": {
+          "color": "#787878",
+          "thickness": 0.7
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      }
+    },
+    "graphId": "memory_graph",
+    "name": "Default",
+    "nodeConfigMap": {
+      "drift_alerts": {
+        "background": {
+          "color": "#9f7aea",
+          "iconName": "mdi:table"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "project_registry": {
+        "background": {
+          "color": "#d53f8c",
+          "iconName": "mdi:table"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "shared_patterns": {
+        "background": {
+          "color": "#7057ff",
+          "iconName": "mdi:table"
+        },
+        "labelAttribute": "_id",
+        "hoverInfoAttributes": [],
+        "rules": []
+      }
+    },
+    "updatedAt": "2026-07-20T22:14:42.158Z",
+    "isDefault": true
+  },
+  {
+    "_key": "326352329",
+    "_id": "_graphThemeStore/326352329",
+    "_rev": "_l2H2TjG---",
+    "graphId": "memory_graph",
+    "name": "shared_memory",
+    "description": "Shared-memory graph: patterns (blue; green=reused, gold=high-importance), projects (purple), drift alerts (red=open, green=closed).",
+    "isDefault": false,
+    "nodeConfigMap": {
+      "shared_patterns": {
+        "background": {
+          "color": "#3182ce",
+          "iconName": "fa6-solid:lightbulb"
+        },
+        "labelAttribute": "problem_category",
+        "hoverInfoAttributes": [
+          "problem_description",
+          "solution_summary",
+          "project_id",
+          "importance",
+          "usage_count",
+          "worked"
+        ],
+        "rules": [
+          {
+            "id": "0d2b073a-ec84-4fb2-bdd9-d386cdec9a15",
+            "attributePath": "usage_count",
+            "attributeType": "number",
+            "conditionType": "singleValue",
+            "condition": {
+              "op": ">=",
+              "right": {
+                "type": "literal",
+                "value": 1
+              },
+              "config": {
+                "background": {
+                  "color": "#38a169",
+                  "iconName": "mdi:table"
+                },
+                "labelAttribute": "",
+                "hoverInfoAttributes": [],
+                "rules": []
+              },
+              "enabledFields": {
+                "color": true,
+                "icon": false,
+                "labelAttribute": false,
+                "hoverInfoAttributes": false
+              }
+            }
+          },
+          {
+            "id": "a3e854dc-f7d6-47f1-9657-e561da2aaa52",
+            "attributePath": "importance",
+            "attributeType": "number",
+            "conditionType": "singleValue",
+            "condition": {
+              "op": ">=",
+              "right": {
+                "type": "literal",
+                "value": 8
+              },
+              "config": {
+                "background": {
+                  "color": "#d69e2e",
+                  "iconName": "mdi:table"
+                },
+                "labelAttribute": "",
+                "hoverInfoAttributes": [],
+                "rules": []
+              },
+              "enabledFields": {
+                "color": true,
+                "icon": false,
+                "labelAttribute": false,
+                "hoverInfoAttributes": false
+              }
+            }
+          }
+        ]
+      },
+      "project_registry": {
+        "background": {
+          "color": "#805ad5",
+          "iconName": "fa6-solid:diagram-project"
+        },
+        "labelAttribute": "project_id",
+        "hoverInfoAttributes": [
+          "project_name",
+          "patterns_contributed",
+          "open_gaps",
+          "project_type",
+          "last_sync"
+        ],
+        "rules": [
+          {
+            "id": "511d64de-22a9-42ee-8c74-a26600d5bb34",
+            "attributePath": "open_gaps",
+            "attributeType": "number",
+            "conditionType": "singleValue",
+            "condition": {
+              "op": ">=",
+              "right": {
+                "type": "literal",
+                "value": 1
+              },
+              "config": {
+                "background": {
+                  "color": "#dd6b20",
+                  "iconName": "mdi:table"
+                },
+                "labelAttribute": "",
+                "hoverInfoAttributes": [],
+                "rules": []
+              },
+              "enabledFields": {
+                "color": true,
+                "icon": false,
+                "labelAttribute": false,
+                "hoverInfoAttributes": false
+              }
+            }
+          }
+        ]
+      },
+      "drift_alerts": {
+        "background": {
+          "color": "#718096",
+          "iconName": "fa6-solid:triangle-exclamation"
+        },
+        "labelAttribute": "req_id",
+        "hoverInfoAttributes": [
+          "requirement",
+          "classification",
+          "status",
+          "project_id",
+          "gap_description"
+        ],
+        "rules": [
+          {
+            "id": "9a8fac55-903c-4356-87ad-4f1f01b67885",
+            "attributePath": "status",
+            "attributeType": "string",
+            "conditionType": "singleValue",
+            "condition": {
+              "op": "==",
+              "right": {
+                "type": "literal",
+                "value": "open"
+              },
+              "config": {
+                "background": {
+                  "color": "#e53e3e",
+                  "iconName": "mdi:table"
+                },
+                "labelAttribute": "",
+                "hoverInfoAttributes": [],
+                "rules": []
+              },
+              "enabledFields": {
+                "color": true,
+                "icon": false,
+                "labelAttribute": false,
+                "hoverInfoAttributes": false
+              }
+            }
+          },
+          {
+            "id": "91c7dafd-b350-4575-a2f4-0af0204000e1",
+            "attributePath": "status",
+            "attributeType": "string",
+            "conditionType": "singleValue",
+            "condition": {
+              "op": "==",
+              "right": {
+                "type": "literal",
+                "value": "closed"
+              },
+              "config": {
+                "background": {
+                  "color": "#48bb78",
+                  "iconName": "mdi:table"
+                },
+                "labelAttribute": "",
+                "hoverInfoAttributes": [],
+                "rules": []
+              },
+              "enabledFields": {
+                "color": true,
+                "icon": false,
+                "labelAttribute": false,
+                "hoverInfoAttributes": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    "edgeConfigMap": {
+      "pattern_relates_to": {
+        "lineStyle": {
+          "color": "#3182ce",
+          "thickness": 1.2
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "pattern_from_project": {
+        "lineStyle": {
+          "color": "#718096",
+          "thickness": 1
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "alert_from_project": {
+        "lineStyle": {
+          "color": "#38a169",
+          "thickness": 1
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "pattern_addresses_requirement": {
+        "lineStyle": {
+          "color": "#dd6b20",
+          "thickness": 1.2
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "pattern_supersedes": {
+        "lineStyle": {
+          "color": "#e53e3e",
+          "thickness": 1.2
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "hoverInfoAttributes": [],
+        "rules": []
+      },
+      "requirement_depends_on": {
+        "lineStyle": {
+          "color": "#805ad5",
+          "thickness": 1.2
+        },
+        "arrowStyle": {
+          "sourceArrowShape": "none",
+          "targetArrowShape": "triangle"
+        },
+        "labelStyle": {
+          "color": "#1d2531"
+        },
+        "hoverInfoAttributes": [],
+        "rules": []
+      }
+    },
+    "updatedAt": "2026-07-21T02:19:11.875603Z",
+    "createdAt": "2026-07-20T23:09:24.356772Z"
+  }
+]
