@@ -35,6 +35,35 @@ class TestRolloutCursorHooks(unittest.TestCase):
         other.mkdir()
         self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project])
 
+    def test_discovers_a_skills_only_project(self):
+        """A project with skills but no hooks must still be reachable.
+
+        The old predicate required .claude/hooks/session_recall.py, so a half-installed
+        project — skills placed, hooks never — was invisible to every rollout and could
+        never be refreshed. That is precisely the population most likely to be stale.
+        """
+        skills_only = Path(self.temp.name) / "skills-only"
+        (skills_only / ".claude" / "skills" / "prd-sync").mkdir(parents=True)
+        (skills_only / ".claude" / "skills" / "prd-sync" / "SKILL.md").write_text(
+            "# stale\n", encoding="utf-8")
+        found = self.mod.discover(Path(self.temp.name))
+        self.assertIn(skills_only, found)
+        self.assertIn(self.project, found)
+
+    def test_discovery_still_ignores_unrelated_repos(self):
+        """Widening the predicate must not widen the blast radius."""
+        for name, rel in (("plain", None),
+                          ("has-git", ".git/config"),
+                          ("other-claude-skills", ".claude/skills/some-other-skill/SKILL.md")):
+            repo = Path(self.temp.name) / name
+            if rel is None:
+                repo.mkdir()
+            else:
+                (repo / rel).parent.mkdir(parents=True)
+                (repo / rel).write_text("x\n", encoding="utf-8")
+            self.assertNotIn(repo, self.mod.discover(Path(self.temp.name)),
+                             f"{name} should not be treated as bootstrapped")
+
     def test_merge_preserves_unrelated_cursor_hooks(self):
         existing = {
             "version": 1,

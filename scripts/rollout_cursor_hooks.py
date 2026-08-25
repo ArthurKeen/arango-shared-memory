@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Install/refresh shared-memory hook enforcement in bootstrapped local projects.
 
-Projects are discovered by the canonical Claude SessionStart hook, so unrelated
-repositories under the scan root are untouched. Existing Cursor hooks are
+Projects are discovered by any canonical bootstrap marker, so unrelated repositories
+under the scan root are untouched. Existing Cursor hooks are
 merged by event/command; unrelated hook entries are preserved. The canonical
 Claude digest/stop/apply hooks are refreshed at the same time.
 """
@@ -56,6 +56,28 @@ IGNORE_LINES = (
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "build", "dist"}
 
 
+# Any ONE of these means "this repo was bootstrapped by us" and is safe to refresh.
+# Keying solely on the Claude SessionStart hook silently excluded the projects most
+# likely to be stale: a repo bootstrapped before the hook existed, or one that got
+# skills but never got hooks, was invisible and therefore unreachable by every
+# rollout ever run. contextual-data-fabric sat that way with 8 skills, zero hooks, a
+# prd-sync skill 140 lines behind, and no check_evidence.py at all.
+#
+# Every marker is specific to this system — no unrelated repository has a
+# skills/prd-sync/SKILL.md — so widening discovery does not widen blast radius.
+BOOTSTRAP_MARKERS = (
+    Path(".claude") / "hooks" / "session_recall.py",
+    Path(".claude") / "skills" / "prd-sync" / "SKILL.md",
+    Path(".claude") / "skills" / "pattern-search" / "SKILL.md",
+    Path(".cursor") / "hooks" / "shared_memory_session_start.py",
+)
+
+
+def is_bootstrapped(here: Path) -> bool:
+    """True when any canonical marker is present (see BOOTSTRAP_MARKERS)."""
+    return any((here / marker).is_file() for marker in BOOTSTRAP_MARKERS)
+
+
 def discover(root: Path) -> list[Path]:
     projects: list[Path] = []
     for current, dirs, _ in os.walk(root):
@@ -64,7 +86,7 @@ def discover(root: Path) -> list[Path]:
         if here == REPO_ROOT / "templates":
             dirs[:] = []
             continue
-        if (here / ".claude" / "hooks" / "session_recall.py").is_file():
+        if is_bootstrapped(here):
             projects.append(here)
             dirs[:] = []
     return sorted(projects)
