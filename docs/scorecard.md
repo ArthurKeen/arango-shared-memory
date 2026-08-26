@@ -434,3 +434,13 @@ older versions survive only on never-resynced docs. Core fields are 379/379; old
 are unrecoverable (single-revision store). Fix belongs with the now-synced skill fleet:
 define a stable alert field set in prd-sync, then a one-time normalisation pass —
 planned separately, not executed as part of the 08-25 remediation.
+
+**C2 decision (2026-08-26, owner):** `contextual-data-fabric` was FULLY RESTORED to its
+pre-rollout state (hooks and `.cursor/` additions deleted; `settings.json` + 3 skills +
+`.gitignore` restored — the settings backup preserved the owner's own uncommitted diff).
+Rationale: unlike the other 31 projects, CDF **tracks `.claude/` in a public repo**, so
+the rollout amounted to unreviewed changes to published, PR-governed content. Enforcement
+there, if wanted, should arrive as a reviewed PR in that repo. Consequences accepted:
+fleet is 31/32 by design, CDF sessions follow the committed (month-stale) skill text, and
+`rollout_cursor_hooks.py` will list CDF as "would-update" on every dry run until an
+exclusion mechanism or that PR exists.
