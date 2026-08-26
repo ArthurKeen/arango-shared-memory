@@ -129,3 +129,8 @@ them from the backup after the re-run.
   commit them; never paste them into a repo, PR, or pattern. `.env` files are gitignored.
 - **Stuck?** `setup.md` has a Troubleshooting table (no view, no OpenAI key, `poetry` not on PATH,
   hooks not firing, TLS/auth).
+- **Graph Visualizer: look, don't touch.** A known display bug can render canvas nodes as
+  empty stubs (Properties shows only `_id`/`_key`) even though the documents are intact —
+  and the panel still offers **Save**, which risks overwriting a real document with the
+  stub. Never edit documents through the visualizer; use the Collections UI or AQL. Details:
+  `docs/visualizer/BUG-REPORT-node-hydration.md`.

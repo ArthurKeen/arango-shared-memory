@@ -5,6 +5,18 @@ description: Installs and maintains ArangoDB Graph Visualizer customization asse
 
 # ArangoDB Visualizer Customizer (themes, saved queries, canvas actions)
 
+> ⚠️ **ADVISORY (2026-08-25) — treat the Graph Visualizer as READ-ONLY for documents.**
+> On at least one production deployment, canvas nodes are **frontend-synthesized stubs**:
+> the node Properties panel shows only `_id`/`_key`, with the `_key` illegally containing
+> `/` (a value ArangoDB rejects on insert — the tell that it is not a real document). The
+> underlying documents are fully intact server-side (verified in the Collections UI and
+> via AQL, same login, same moment). **The panel still offers editing and a Save button;
+> saving could overwrite a fully-populated document with the stub.** Never edit/Save a
+> document through the visualizer's Properties panel — use the Collections UI or AQL.
+> This also means **attribute-based theme rules cannot match** (nodes carry no attributes
+> to test) until the product bug is fixed. Evidence and status:
+> `docs/visualizer/BUG-REPORT-node-hydration.md` in the arango-shared-memory repo.
+
 This skill provides a repeatable, idempotent workflow for customizing the ArangoDB **Graph Visualizer** by installing:
 
 - **Themes** (colors/icons) in `_graphThemeStore`
@@ -166,11 +178,12 @@ Field meanings:
 - **`attributePath`**: the document attribute the rule keys off (e.g. `inferredRisk`, `dataSource`).
 - **`attributeType`**: `"number"` or `"string"`.
 - **`conditionType`**: `"singleValue"` for a single comparison (the only verified type).
-- **`condition.op`**: operator string. Comparison operators `">="`, `"<="`, `"<"`, `">"` are **verified working** on numeric attributes. **String equality is UNRESOLVED — do not ship one.** Both candidates fail, differently and dangerously (both observed live against `memory_graph`, 2026-08-25):
-  - `"=="` — accepted; the Attribute-based tab shows an empty "Select condition"; the rule **never matches**, so every node falls through to the base colour. Looks like "the data has no variation".
-  - `"="` — accepted; the Attribute-based tab shows **no rules at all**; the **first rule's colour is applied to every node**. 366 drift alerts all rendered "open" red when only 163 were open. This is the worse failure: it looks like functioning colour-coding and gets read as data.
-  > An earlier revision of this skill stated that a single `"="` was correct and "verified". It was not — no UI-authored string rule existed anywhere on the cluster to verify against. Treat the numeric operators as evidence-backed and string equality as unknown.
-  > **To resolve:** author one string rule through the live Visualizer UI ("+ New rule" in the Attribute-based tab), save, then read the document back out of `_graphThemeStore` and copy the operator it wrote. Prefer a load-time filter (a `_queries` entry) over a theme rule for status until then.
+- **`condition.op`**: operator string. What is actually known, kept strictly separate from what is not:
+  - **Known (format):** the nested rule schema itself was reverse-engineered from a UI-authored *numeric* rule, so the comparison-operator format (`">="`, `"<="`, `"<"`, `">"`) matches what the UI writes.
+  - **Unknown (effect):** whether ANY rule visibly fires cannot currently be established on the affected deployment — canvas nodes are unhydrated stubs with no attributes to test (see the ADVISORY at the top and `docs/visualizer/BUG-REPORT-node-hydration.md`). Do not infer operator semantics from what the canvas shows there.
+  - **Unknown (string equality wire format):** two candidates were shipped programmatically against `memory_graph` (2026-08-25); both produced misleading canvases and neither is confirmed. *Observations only, mechanisms unknown:* with `"=="` rules, the Attribute-based editor showed a blank "Select condition" and all nodes wore the base colour; with `"="` rules, the editor showed no rules at all and every node wore the FIRST rule's colour (366 alerts all red when 163 were open). **Do not ship a string-equality rule until the format is confirmed from a UI-authored rule.**
+  > History, kept as a warning: one revision of this skill declared `"="` correct and "verified" — with no UI-authored string rule existing anywhere to verify against. A later revision then declared the numeric rules "verified working" — also unverified (base collection colours were mistaken for rule effects). Neither claim survived. **"Verified" in this file must mean: read back from `_graphThemeStore` after authoring through the UI, or observed as a colour change attributable to a rule — nothing less.**
+  > **To resolve the string format:** author one string rule through the live Visualizer UI ("+ New rule" in the Attribute-based tab) **on a theme that is NOT marked `isDefault: true`** — the UI cannot save edits to the default theme (see Troubleshooting: "Can't save edits to a theme in the UI"), which silently discards the authored rule. Save, read the theme document back out of `_graphThemeStore`, and copy the operator the UI wrote. Prefer a load-time filter (a `_queries` entry) over a status theme rule until then.
 - **`condition.right`**: `{ "type": "literal", "value": <number-or-string> }` — the comparison value. Numbers are bare; strings are plain (no quotes).
 - **`condition.config`**: the style applied when the rule matches. Mirrors a node config (`background.color` / `background.iconName`, `labelAttribute`, `hoverInfoAttributes`, nested `rules: []`). `iconName` defaults to `"mdi:table"` even when unused.
 - **`condition.enabledFields`**: which parts of `config` are active — `{ "color": true/false, "icon": …, "labelAttribute": …, "hoverInfoAttributes": … }`. To color only, set `color: true` and the rest `false`.

@@ -245,22 +245,25 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
             "labelAttribute": "req_id",
             "hoverInfoAttributes": ["requirement", "classification",
                                     "status", "project_id", "gap_description"],
-            # NO status rules until the string-equality operator is empirically known.
-            # Both candidates are wrong, in opposite and equally misleading ways:
-            #   "==" -> accepted, editor shows a blank "Select condition", never matches;
-            #          every alert falls through to the base colour. (Shipped for weeks.)
-            #   "="  -> accepted, editor shows NO rules at all, and the FIRST rule's colour
-            #          is applied to every node — so all 366 alerts rendered "open" red
-            #          while only 163 were open. Verified live 2026-08-25.
-            # An inert rule is bad; a rule that paints every node the wrong status is worse,
-            # because it looks like working colour-coding and is read as data.
-            # The numeric ">=" rules above ARE verified working (patterns/projects colour
-            # correctly), so this is specific to string equality.
-            # To resolve: author ONE string rule through the Visualizer UI, then read what
-            # the UI wrote into _graphThemeStore. That is how the rest of this schema was
-            # reverse-engineered, and it is the only source of truth for this field.
-            # Until then, status is handled by the "Load: OPEN drift gaps only" panel query,
-            # which filters at load time and needs no theme rule.
+            # NO status rules — and the reason is upstream of any operator choice.
+            # Root cause (user-verified 2026-08-25, docs/visualizer/BUG-REPORT-node-
+            # hydration.md): on the affected deployment, canvas nodes are frontend-
+            # synthesized stubs carrying NO document attributes, so no theme rule of any
+            # operator can match anything. Two string-equality attempts were shipped here
+            # before that was understood; both produced misleading canvases (observations,
+            # mechanisms unknown): with "==" rules every alert wore the base colour; with
+            # "=" rules every alert wore the FIRST rule's colour (366 red / 163 actually
+            # open). Earlier revisions of this comment called each of those a verified
+            # mechanism, and also called the numeric ">=" rules above "verified working" —
+            # none of that was verified; base collection colours were mistaken for rule
+            # effects. The numeric rules are RETAINED because their wire format matches a
+            # UI-authored rule and they are correct if/when node hydration is fixed; their
+            # visual effect is currently unverifiable.
+            # String-equality wire format: still unknown. Recover it by authoring one rule
+            # in the UI on a NON-default theme (the UI silently discards edits to the
+            # default theme), then reading back _graphThemeStore.
+            # Until then, status is handled by the "Load: OPEN drift gaps only" panel
+            # query, which filters at load time and needs no theme rule.
             "rules": [],
         },
     }

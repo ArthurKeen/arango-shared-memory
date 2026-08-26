@@ -401,3 +401,36 @@ enforcement side. The hook/gate layer, evidence verification, and reuse attribut
 counterpart in the comparison project — and the outcome-weighted ranking term
 (`succ = applied_worked / (applied_worked + applied_failed)`) is a signal it lacks entirely. The
 gap is concentrated in retrieval engineering and test infrastructure, not in the ideas.
+
+## 7. Addendum 2026-08-25 (evening): visualizer investigation resolved; a correction to my own record
+
+**The Graph Visualizer "sea of alerts" thread ended at a product bug, verified by the
+operator, not by this repo's tooling.** Same browser, same login, same moment: the
+platform Collections UI shows `drift_alerts` documents fully populated, while the Graph
+Visualizer's node Properties panel shows two-field stubs whose `_key` illegally contains
+`/` — frontend-synthesized objects, not documents. All 379 alerts are intact server-side
+(field census + `DECODE_REV` last-write audit). Evidence package and reproduction:
+`docs/visualizer/BUG-REPORT-node-hydration.md`.
+
+**Hazard shipped with an advisory:** the stub panel is editable with a **Save** button —
+saving could overwrite a real document with the stub. Until fixed upstream, the
+visualizer is read-only for documents (advisory added to ONBOARDING.md and the
+visualizer-customizer skill).
+
+**Correction of this repo's record.** Today's visualizer commits (`a7f9ef7`, `e0fcb4e`)
+asserted operator mechanisms as verified — "`==` never matches", "`=` paints every node
+the first rule's colour", "numeric rules verified working". None of those were verified;
+canvas nodes carry no attributes, so no rule effect was ever observable, and base
+collection colours were mistaken for rule effects. The skill, installer, and tests now
+separate observations from mechanisms and define "verified" as *read back from
+`_graphThemeStore` after UI authoring, or a colour change attributable to a rule*.
+
+**New tracked item — `drift_alerts` schema sediment (pre-existing, organic):** ~18
+long-tail fields exist on only 1–8 documents each, with near-duplicate conventions
+(`last_seen`/`last_seen_at`, `state`/`status`, `requirement_id`/`req_id`,
+`closed_reason`/`closing_note`/`resolution`). Cause: successive prd-sync skill versions
+wrote different field sets and re-syncs REPLACE alert documents, so fields written by
+older versions survive only on never-resynced docs. Core fields are 379/379; old values
+are unrecoverable (single-revision store). Fix belongs with the now-synced skill fleet:
+define a stable alert field set in prd-sync, then a one-time normalisation pass —
+planned separately, not executed as part of the 08-25 remediation.
