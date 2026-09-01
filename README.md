@@ -22,10 +22,14 @@ cross-project capabilities, backed by ArangoDB:
    **Read the caveat before trusting the number.** The current set is *saturated*:
    MRR 0.98 / R@5 1.00, **identical across bm25, hybrid, and hybrid+graph**. It
    therefore cannot distinguish the three modes, and does **not** establish that the
-   hybrid or graph layers earn their place. Rebuilding it — harder queries, per-mode
-   deltas allowed to diverge, and an isolation run that attributes any gain to a
-   named component — is the top-ranked open item in
-   [docs/scorecard.md](docs/scorecard.md) §6.
+   hybrid or graph layers earn their place — and the corpus it was built against has
+   since grown ~43% (68 → 97 patterns) without a re-measure. Rebuilding it — harder
+   queries, per-mode deltas allowed to diverge, and an isolation run that attributes
+   any gain to a named component — is the top-ranked open item in
+   [docs/scorecard.md](docs/scorecard.md) §6. The *reuse* funnel, by contrast, is now
+   measured post-fix: after two attribution defects were removed, conversion settled at
+   40% and applies-per-search at 1.01 (scorecard, Round 6) — lower than the old
+   inflated 44%, and finally believable.
 3. **Automatic recall, capture, and enforcement** — a SessionStart hook injects a per-project
    digest (open gaps, PRD staleness, feedback memories, top patterns); a PostToolUse hook queues
    drift markers (code *and* PRD edits, incl. MultiEdit/NotebookEdit); a Stop hook mines the
@@ -33,13 +37,23 @@ cross-project capabilities, backed by ArangoDB:
    corrections → `.pattern-capture-queue/`, triaged by `/pattern-save`); a Stop gate blocks session
    end (once) while the drift queue is non-empty. Cursor-native project hooks now mirror the
    Claude hooks. Both clients track searched pattern keys and issue one attribution follow-up when
-   `pattern-applied` was omitted; they never equate "surfaced" with "applied."
+   `pattern-applied` was omitted; they never equate "surfaced" with "applied." Everything is
+   **fail-open but never fail-silent**: an unreachable backend cannot break a session, and it
+   announces itself instead of impersonating a quiet day (three multi-day outages hid behind
+   silent fail-open before that rule existed).
 4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
    project's state (including the PRD content hash); `search_log` records interactive searches
    and automatic SessionStart recalls as distinct modes; every
    write is stamped with **who did it** (`saved_by` / `detected_by` / apply log, from each
    developer's own scoped DB account) so reuse and contribution are measurable *per person*,
    not assumed.
+5. **Graph Visualizer assets** (`scripts/install_visualizer.py`) — a status-coloured theme
+   (alerts red/amber/grey by `status`, patches by `review_state`, observations by `state`),
+   status-scoped load queries, and canvas actions for the `memory_graph`. **Advisory:** on large
+   canvases a known product bug renders nodes as attribute-less stubs (colours/labels degrade,
+   and the Properties panel must not be used to edit — see
+   [docs/visualizer/BUG-REPORT-node-hydration.md](docs/visualizer/BUG-REPORT-node-hydration.md));
+   prefer the filtered "Load: OPEN drift gaps only" query.
 
 The PRD for this system itself is [docs/PRD.md](docs/PRD.md) (yes, `/prd-sync` can audit this
 repo against it). The current change round is documented in

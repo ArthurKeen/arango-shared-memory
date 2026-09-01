@@ -1,6 +1,13 @@
 # System Scorecard — arango-shared-memory
 
-_Last updated: 2026-08-25 (round 5 + addenda: see §2, §3 caveat 1, §4 and §6.8 — a
+_Last updated: 2026-08-28 (round 6: **the prediction held** — with the gate fixed and the
+Phase-4 skill delivered, applies flattened (+5 vs +21 new patterns), conversion fell
+44% → 40%, and applies-per-search converged 1.21 → 1.14 → 1.01. That decline is the
+inflation leaving, not a regression — it was written down in advance for exactly this
+reading. Still zero recorded failures (85/85 "worked"), so the outcome flag itself is the
+next soft spot. See "Round 6" under Changes applied. Earlier header preserved below._
+
+_Round 5 header (2026-08-25, unchanged): (round 5 + addenda: see §2, §3 caveat 1, §4 and §6.8 — a
 delivery-path defect meant three skill fixes never reached 28-31 projects, which bears directly
 on the funnel figure. Original round-5 body below unchanged.
 Round 5: the apply gate's inflation mechanism was found and removed — it was
@@ -36,8 +43,8 @@ can be trusted, and it should be expected to look *worse*.
 |---|---|---|---|
 | PRD requirement coverage | A− | = | §3 retrieval fully IMPLEMENTED (superseded hard-excluded; memory_type first-class + filter) |
 | Live health (prod) | A− | = | verify.py all-green incl. MCP liveness; two open warnings (1 deferred embedding, 7 patches awaiting review) |
-| Adoption & value (read-path) | B− | ↓ | volume up (127 recalls, 80 searches, 91 applies, 20 projects reading) but conversion flat at 44%, still **one** human, and the figure was measured under **two** independent defects — the gate compelling attribution, and Phase 4 missing from the deployed skill in 28/31 projects so the protocol never asked for it (§3 caveat 1, §6.8) |
-| **Metric integrity** | **C** | **new** | the apply funnel's inflation mechanism is identified and removed, but every historical figure was produced under it and no post-fix data exists yet |
+| Adoption & value (read-path) | B− | = | **round 6:** volume strongly up (219 recalls, 95 searches, 97 patterns, 28 registered projects, 23 producing reads) while conversion honestly *fell* to 40% — the post-fix number. Still **one** human reading (all 95 searches `arthur`; `pj` at 2 saved patterns) |
+| **Metric integrity** | **B−** | **↑** | post-fix data now exists and behaved exactly as predicted (applies flat, ratio → 1.01), so the funnel figure is finally being measured honestly. Remaining defect: **0 recorded failures in 96 applies** — the `worked` flag is still assertion-grade; needs a harder outcome definition |
 | Engineering quality | A | ↑ | 66 DB-free tests (2 skipped, was 57); CI matrix on Python 3.11–3.14 all green; MIT licensed; the missing allow-path coverage that hid the gate defect is closed |
 | Reliability / robustness | A | = | Cursor/Claude parity maintained through the gate fix (the Cursor gate carried the identical defect); merge-safe rollout to 31 repos; separate recall telemetry |
 | Liveness / self-observability | B− | ↑ | **now continuous without a scheduler**: SessionStart fails open but no longer fails *silent*, so every session reports a dead read path. Server-side, a blocked startup connect no longer takes the whole toolset down (2026-08-21). Remaining gap: nothing reports when nobody starts a session |
@@ -142,6 +149,56 @@ can be trusted, and it should be expected to look *worse*.
 - **`argos` bootstrapped** as the 31st repo and has already produced its first `/prd-sync`
   (17 gaps, `last_sync` 2026-08-19). It is registered but has **no read yet**, which is expected
   at this age.
+
+### Round 6 (2026-08-28): the prediction held — inflation left the funnel
+
+The first measurement taken with both funnel defects fixed (the unsatisfiable gate,
+2026-08-18; the missing Phase-4 attribution step, delivered fleet-wide 2026-08-25).
+Round 5 wrote the expected outcome down in advance so a decline could not be misread as
+regression. It declined:
+
+| Metric | Round 5 (08-19) | Round 6 (08-28) | Reading |
+|---|---|---|---|
+| Patterns / registered projects | 76 / 25 | **97 / 28** | corpus +28% in 9 days |
+| Automatic recalls | 127 | **219** (+72%) | the injected read path is the system's busiest organ |
+| Interactive searches (hit rate) | 80 (96%) | **95 (97%)** | steady |
+| Apply events | 91 | **96** | **flat while patterns grew 28% — the inflation stopped** |
+| Surfaced → applied | 44% | **40%** | the predicted honest drop |
+| Applies per interactive search | 1.14 | **1.01** | 1.21 → 1.14 → 1.01: converging on plausible |
+| Recorded failures | 0 / 80 | **0 / 85** | still implausible — see below |
+| Humans reading | 1 | **1** | all 95 searches `arthur`; `pj` now 2 saved patterns |
+
+**Interpretation.** Applies-per-search at 1.01 and a falling conversion are what honest
+attribution looks like after removing a gate that manufactured it. The funnel number is
+now trustworthy *as a rate of recorded applies*; what remains assertion-grade is the
+outcome flag itself — **96 applies, 85 recorded outcomes, still zero failures**. Round 5
+said it plainly: if outcomes stay 100% positive after the gate fix, the flag needs a
+harder definition (e.g. an apply event that references the commit/test that validated
+it). That is now the top metric-integrity action.
+
+**Also landed between rounds** (each detailed in §6.8, the bug report, or commit history):
+- **MCP availability hardening (08-21/22):** a transient `:8529` outage exposed that the
+  server's startup DB connect gated the whole MCP protocol (31s of retry backoff vs the
+  client's 30s handshake ceiling → all 61 tools dropped). Fixed: bounded, non-fatal
+  startup (`STARTUP_CONNECT_BUDGET`); SessionStart hook now fails open but never silent;
+  stale-client-process diagnosis documented. Liveness B− stands.
+- **Skill delivery drift closed (08-25):** rollout tool now syncs skills and discovers
+  half-bootstrapped projects; 28 projects were running stale protocol files (§6.8).
+  Fleet: 31 repos in sync + `contextual-data-fabric` deliberately restored to
+  pre-rollout state (public repo that tracks `.claude/`; enforcement there belongs in a
+  reviewed PR — see the 08-25 remediation record).
+- **Graph Visualizer resolved as a size-dependent product bug (08-26/28):** node
+  attributes hydrate on small/filtered canvases and are absent (stub nodes) on large
+  ones — user-verified both regimes; full evidence in
+  `docs/visualizer/BUG-REPORT-node-hydration.md`, including a Save-on-stub data-loss
+  hazard now covered by advisories. String-equality rule operator resolved as `=` (the
+  UI's own operator, observed colouring correctly on a hydrated canvas). Status colour
+  coding is now live on the shared theme for `drift_alerts` (red/amber/grey),
+  `prd_patches` (proposed/accepted/rejected/superseded), and `sync_observations`
+  (state), and the installer + guard tests generate the same.
+- **The retrieval eval is UNCHANGED and still saturated** (0.98/0.98/0.98, corpus now
+  97 vs the eval's 68). It remains the top-ranked open item in §6 and now measures a
+  corpus 43% larger than the one it was built against.
 
 ## 1. PRD requirement coverage
 

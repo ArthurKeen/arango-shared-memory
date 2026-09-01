@@ -118,11 +118,27 @@ The missing concept was a third state, and it's the *normal* outcome for most re
 
 The consequences ran deeper than an annoying prompt. The gate re-fired every turn, so it read as nagging rather than broken — and an operator who learns to dismiss a nagging gate has also stopped hearing it when it's right. And because the only mechanical way to quiet it was to mark things applied, the gate applied steady upward pressure on the reuse metric. My apply numbers were **gate-assisted**, which is a polite way of saying partly manufactured.
 
-The tell was in the data the whole time: across 91 recorded applications, **80 reported "worked" and zero reported "failed."** Not one of 76 stored patterns has ever recorded a single failed application. No real population of reused solutions is 100% successful. That distribution wasn't success — it was compliance.
+The tell was in the data the whole time: **not one recorded application had ever been reported as "failed."** No real population of reused solutions is 100% successful. That distribution wasn't success — it was compliance.
 
 The fix adds the third state as local audit data that deliberately performs **no write** to the shared store, so recording "I looked and moved on" can never inflate anyone's usage count or corrupt the success-rate ranking that other people's retrieval depends on. Reuse remains attributable by exactly one mechanism.
 
-It also creates a discontinuity I have to be honest about: every number below was produced *under* the broken gate. The next measurement is the first trustworthy one, and I expect my reuse rate to **fall**. That drop will be the inflation leaving, not the system getting worse — and if I hadn't written that expectation down before measuring, I'd have every incentive to read the decline as a regression and "fix" it.
+It also creates a discontinuity I have to be honest about: the numbers were produced *under* the broken gate. So before re-measuring, I wrote the expectation down: the next reading should show reuse **fall**, and that drop will be the inflation leaving, not the system getting worse. Without that note in advance, I'd have every incentive to read the decline as a regression and "fix" it.
+
+Nine days later, the prediction held. With the gate fixed, applies went nearly flat (+5) while the pattern corpus grew 28%. Conversion fell from 44% to 40%. Applies-per-search walked down 1.21 → 1.14 → 1.01 — from "obviously manufactured" to "plausible." The metric got worse and became true. One residue survived the fix, though: still **zero** recorded failures, now 85-for-85. So the pressure that manufactured applies is gone, but the "did it work?" flag itself is still just an agent saying yes — that's the next thing to harden.
+
+## The fix that never shipped
+
+There's a fourth failure, and it's the one that reframed the gate story.
+
+While auditing something unrelated, I compared the instruction files actually deployed in each of my repositories against the master copies. **28 of 31 projects were running stale versions.** The install script placed those files once, at setup, and skipped them forever after; nothing ever refreshed them, and nothing compared them. Fixes I'd committed a month earlier — including a stricter evidence-checker for closing drift alerts — had never reached a single project that mattered.
+
+One of the stale files was the search protocol itself, and the missing part was precisely the step that tells the agent: *when you actually reuse a pattern, record it.* So in 90% of the fleet, nothing ever *asked* for attribution — the only reason reuse got recorded at all was the broken gate demanding it at session end, under pressure. Two defects, pushing the same metric in opposite directions of honesty: one suppressed voluntary reporting, the other compelled dishonest reporting. The 44% figure was measured under both at once.
+
+The lesson is not about either file:
+
+> A fix that has not been verified as delivered has not been made. For anything installed by copy, drift detection belongs in the installer — not in anyone's memory.
+
+"We fixed that" was true in the repository and false everywhere it mattered, for a month, while I analysed the metric it affected across two review rounds. Nothing reported a problem, because nothing was measuring whether deployed artifacts matched their source.
 
 The lesson generalizes past this project: **an unsatisfiable check doesn't read as a bug. It reads as noise, and noise gets tuned out.** If a gate can only be satisfied by doing something the gate itself prohibits, it will train the humans around it to lie, and the metric it feeds will look better as it becomes less true.
 
@@ -150,17 +166,17 @@ The lesson here is not "benchmark your work." I did benchmark my work. The lesso
 
 And a saturated benchmark is worse than none, because it *feels* like rigor. It produces a number, the number goes in a document, and the document starts getting quoted. I published that 0.98 in a project scorecard four times without once noticing that the three figures next to each other were the same figure.
 
-Four failures now, and they rhyme. The outages were invisible because silence looked like health. The gate was invisible because a broken check looked like an annoying one. The benchmark was invisible because a useless measurement looked like a good score. In every case the system was reporting *something*, and the something was reassuring, and that was exactly the problem.
+Five failures now, and they rhyme. The outages were invisible because silence looked like health. The gate was invisible because a broken check looked like an annoying one. The undelivered fixes were invisible because "committed" looked like "shipped." The benchmark was invisible because a useless measurement looked like a good score. In every case the system was reporting *something*, and the something was reassuring, and that was exactly the problem.
 
 ## Where it honestly stands
 
-31 repositories wired in. 76 stored memories contributed from 25 projects. 127 automatic recalls across 20 projects, 80 interactive searches with a 96% hit rate, 91 recorded applications. 148 open drift alerts against requirement documents. 66 tests, no database required to run them.
+31 repositories wired in. 97 stored memories contributed from 28 projects. 219 automatic recalls across 23 projects, 95 interactive searches with a 97% hit rate, 96 recorded applications — and a reuse rate of 40%, the first reading taken with both attribution defects fixed. 152 open drift alerts against requirement documents (227 closed). 70+ tests, no database required to run them.
 
 And the number that matters most: **the user count is one.**
 
 Every search and every application is mine. A second person has contributed exactly one memory — the fix for outage one. So the central premise of this system, that memory becomes more valuable when *shared*, is currently unproven. I have strong evidence it works for one person across many projects. I have no evidence at all for many people across many projects, and no commit I write can produce that evidence.
 
-That's the honest scorecard: a healthy system with real telemetry, one confirmed user, a graph layer with no evidence behind it yet, and a measurement layer I trust a little more each time it catches me being wrong — which is now four times.
+That's the honest scorecard: a healthy system with real telemetry, one confirmed user, a graph layer with no evidence behind it yet, and a measurement layer I trust a little more each time it catches me being wrong — which is now five times.
 
 ---
 
@@ -172,7 +188,7 @@ Three things would genuinely help, in descending order of value:
 
 **Be the second reader.** The single most valuable open item in this project is a second human searching and applying memories, because it's the one thing that converts the premise from plausible to demonstrated. It cannot be fixed with code.
 
-**Break the measurement.** The 44% reuse figure is flattering itself by an amount I can't yet quantify, and I'd rather hear where else that's true. The apply-gate bug above was found by someone treating a nagging prompt as evidence of a design error rather than an annoyance to endure.
+**Break the measurement.** The reuse figure now reads 40%, measured with both known defects fixed — but its "worked" flag is still an agent's own assertion, 85-for-85 positive, and I don't yet have a way to make it lie-proof. I'd rather hear where else the numbers flatter themselves. The apply-gate bug above was found by someone treating a nagging prompt as evidence of a design error rather than an annoyance to endure.
 
 **Steal the patterns, skip the repo.** Three, if you take nothing else. Test the path your consumer actually uses, not the health of the thing it depends on. Check whether any gate you've built can be satisfied honestly — because if it can't, the people around it are already working around it, and your metrics already know. And go look at whether your variants all score the same on your benchmark; if they do, you don't have a benchmark, you have a formality.
 
