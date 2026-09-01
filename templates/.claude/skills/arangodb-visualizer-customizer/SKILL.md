@@ -5,16 +5,20 @@ description: Installs and maintains ArangoDB Graph Visualizer customization asse
 
 # ArangoDB Visualizer Customizer (themes, saved queries, canvas actions)
 
-> ⚠️ **ADVISORY (2026-08-25) — treat the Graph Visualizer as READ-ONLY for documents.**
-> On at least one production deployment, canvas nodes are **frontend-synthesized stubs**:
-> the node Properties panel shows only `_id`/`_key`, with the `_key` illegally containing
-> `/` (a value ArangoDB rejects on insert — the tell that it is not a real document). The
-> underlying documents are fully intact server-side (verified in the Collections UI and
-> via AQL, same login, same moment). **The panel still offers editing and a Save button;
-> saving could overwrite a fully-populated document with the stub.** Never edit/Save a
-> document through the visualizer's Properties panel — use the Collections UI or AQL.
-> This also means **attribute-based theme rules cannot match** (nodes carry no attributes
-> to test) until the product bug is fixed. Evidence and status:
+> ⚠️ **ADVISORY (2026-08-25, refined 2026-08-26) — the stub failure is SIZE-DEPENDENT.**
+> On at least one production deployment, canvas nodes on **large canvases** are
+> **frontend-synthesized stubs**: the node Properties panel shows only `_id`/`_key`, with
+> the `_key` illegally containing `/` (a value ArangoDB rejects on insert — the tell that
+> it is not a real document). On **smaller/filtered canvases the same nodes hydrate
+> fully** (all attributes present, legal `_key`) and theme rules render correctly —
+> user-verified 2026-08-26. The underlying documents are always intact server-side.
+> **In the stub regime the panel still offers editing and a Save button; saving could
+> overwrite a fully-populated document with the stub.** Before editing through the
+> visualizer, check the `_key`: if it contains `/`, you are looking at a stub — never
+> Save; use the Collections UI or AQL. Attribute-based theme rules cannot match stub
+> nodes, so on large canvases colours/labels silently degrade to collection defaults.
+> Prefer filtered load queries (e.g. status-scoped `_queries` entries) to keep canvases
+> inside the hydrating regime. Evidence and status:
 > `docs/visualizer/BUG-REPORT-node-hydration.md` in the arango-shared-memory repo.
 
 This skill provides a repeatable, idempotent workflow for customizing the ArangoDB **Graph Visualizer** by installing:
@@ -178,12 +182,12 @@ Field meanings:
 - **`attributePath`**: the document attribute the rule keys off (e.g. `inferredRisk`, `dataSource`).
 - **`attributeType`**: `"number"` or `"string"`.
 - **`conditionType`**: `"singleValue"` for a single comparison (the only verified type).
-- **`condition.op`**: operator string. What is actually known, kept strictly separate from what is not:
-  - **Known (format):** the nested rule schema itself was reverse-engineered from a UI-authored *numeric* rule, so the comparison-operator format (`">="`, `"<="`, `"<"`, `">"`) matches what the UI writes.
-  - **Unknown (effect):** whether ANY rule visibly fires cannot currently be established on the affected deployment — canvas nodes are unhydrated stubs with no attributes to test (see the ADVISORY at the top and `docs/visualizer/BUG-REPORT-node-hydration.md`). Do not infer operator semantics from what the canvas shows there.
-  - **Unknown (string equality wire format):** two candidates were shipped programmatically against `memory_graph` (2026-08-25); both produced misleading canvases and neither is confirmed. *Observations only, mechanisms unknown:* with `"=="` rules, the Attribute-based editor showed a blank "Select condition" and all nodes wore the base colour; with `"="` rules, the editor showed no rules at all and every node wore the FIRST rule's colour (366 alerts all red when 163 were open). **Do not ship a string-equality rule until the format is confirmed from a UI-authored rule.**
-  > History, kept as a warning: one revision of this skill declared `"="` correct and "verified" — with no UI-authored string rule existing anywhere to verify against. A later revision then declared the numeric rules "verified working" — also unverified (base collection colours were mistaken for rule effects). Neither claim survived. **"Verified" in this file must mean: read back from `_graphThemeStore` after authoring through the UI, or observed as a colour change attributable to a rule — nothing less.**
-  > **To resolve the string format:** author one string rule through the live Visualizer UI ("+ New rule" in the Attribute-based tab) **on a theme that is NOT marked `isDefault: true`** — the UI cannot save edits to the default theme (see Troubleshooting: "Can't save edits to a theme in the UI"), which silently discards the authored rule. Save, read the theme document back out of `_graphThemeStore`, and copy the operator the UI wrote. Prefer a load-time filter (a `_queries` entry) over a status theme rule until then.
+- **`condition.op`**: operator string. Status of each claim, with its evidence:
+  - **Comparison operators** (`">="`, `"<="`, `"<"`, `">"`): format matches a UI-authored *numeric* rule (the origin of this whole schema).
+  - **String equality is a single `"="` — RESOLVED 2026-08-26 by direct observation.** A rule authored through the Visualizer's Attribute-based editor (`status = closed` → grey) displayed `=` in the UI's own operator dropdown and coloured exactly the matching nodes on a hydrated canvas. (It could not be recovered by DB read-back: it was authored on the *default* theme, whose UI edits are silently discarded — that separate limitation still stands.)
+  - **`"=="` is wrong**: the store accepts it, the Attribute-based editor renders it as a blank "Select condition", and no styling has ever been observed from it. Never ship it.
+  - **Rules only render on hydrated canvases.** On large canvases nodes are attribute-less stubs (see ADVISORY) and NO rule of any operator can match — that regime produced this skill's earlier contradictory operator "observations" (all-base-colour under `"=="`; all-first-rule-colour under `"="`), which said nothing about operators. Judge rule behaviour only on a canvas where the Properties panel shows real attributes.
+  > History, kept as a warning: one revision of this skill declared `"="` verified with no evidence; the next declared it unknowable; both were written without a hydrated canvas to test on. **"Verified" in this file means: read back from `_graphThemeStore` after authoring through the UI, or observed as a colour change attributable to a rule on a hydrated canvas — nothing less.**
 - **`condition.right`**: `{ "type": "literal", "value": <number-or-string> }` — the comparison value. Numbers are bare; strings are plain (no quotes).
 - **`condition.config`**: the style applied when the rule matches. Mirrors a node config (`background.color` / `background.iconName`, `labelAttribute`, `hoverInfoAttributes`, nested `rules: []`). `iconName` defaults to `"mdi:table"` even when unused.
 - **`condition.enabledFields`**: which parts of `config` are active — `{ "color": true/false, "icon": …, "labelAttribute": …, "hoverInfoAttributes": … }`. To color only, set `color: true` and the rest `false`.

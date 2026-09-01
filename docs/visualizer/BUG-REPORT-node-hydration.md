@@ -100,6 +100,24 @@ and the UI cannot save edits to a default theme (a separate, previously document
 limitation), so the authored rule was silently discarded. Re-attempting on a
 non-default theme is the known path to recovering the format.
 
+## 6b. UPDATE 2026-08-26/28 — failure is SIZE-DEPENDENT (user-verified); §6 anomaly explained at the observation level
+
+- On a **smaller canvas** (~260 nodes / 244 edges, loaded via a filtered query) the same
+  `drift_alerts` nodes hydrate **fully**: Properties shows every field with a legal
+  `_key`, labels honour `labelAttribute`, and an Attribute-based rule authored in the UI
+  (`status = closed`, operator dropdown showing `=`) **colours exactly the matching
+  nodes**. On large canvases (400+ nodes via broad edge queries) the stub behaviour of
+  §1 reproduces. So the hydration failure is size-dependent — likely a cap, timeout, or
+  silent failure on the hydration request for large id sets — not a wholesale breakage.
+- This also resolves §6's operator question for consumers: string equality is `=` (the
+  UI's own operator), and the earlier contradictory observations under `==`/`=` were
+  artifacts of evaluating rules against unhydrated stubs, not operator semantics.
+- The §5 hazard stands, scoped to the large-canvas regime: the stub Properties panel
+  (tell: `_key` containing `/`) still offers Save there.
+- Suggested additional diagnostic for §7: bisect the node-count threshold at which
+  hydration stops populating attributes, and check whether the hydration POST is absent,
+  truncated, or failing at that size.
+
 ## 7. Open questions / suggested next diagnostics
 
 1. Browser DevTools → Network while the canvas loads: is the `_api/cursor` POST

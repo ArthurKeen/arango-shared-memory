@@ -245,26 +245,46 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
             "labelAttribute": "req_id",
             "hoverInfoAttributes": ["requirement", "classification",
                                     "status", "project_id", "gap_description"],
-            # NO status rules — and the reason is upstream of any operator choice.
-            # Root cause (user-verified 2026-08-25, docs/visualizer/BUG-REPORT-node-
-            # hydration.md): on the affected deployment, canvas nodes are frontend-
-            # synthesized stubs carrying NO document attributes, so no theme rule of any
-            # operator can match anything. Two string-equality attempts were shipped here
-            # before that was understood; both produced misleading canvases (observations,
-            # mechanisms unknown): with "==" rules every alert wore the base colour; with
-            # "=" rules every alert wore the FIRST rule's colour (366 red / 163 actually
-            # open). Earlier revisions of this comment called each of those a verified
-            # mechanism, and also called the numeric ">=" rules above "verified working" —
-            # none of that was verified; base collection colours were mistaken for rule
-            # effects. The numeric rules are RETAINED because their wire format matches a
-            # UI-authored rule and they are correct if/when node hydration is fixed; their
-            # visual effect is currently unverifiable.
-            # String-equality wire format: still unknown. Recover it by authoring one rule
-            # in the UI on a NON-default theme (the UI silently discards edits to the
-            # default theme), then reading back _graphThemeStore.
-            # Until then, status is handled by the "Load: OPEN drift gaps only" panel
-            # query, which filters at load time and needs no theme rule.
-            "rules": [],
+            # String-equality op is "=", RESOLVED 2026-08-26 by direct observation: the
+            # user authored `status = closed` through the Visualizer's Attribute-based
+            # editor (its own operator dropdown shows "="), and the colour change applied
+            # to exactly the closed nodes on a hydrated canvas. Earlier failures of BOTH
+            # "==" and "=" happened in the unhydrated-stub regime and said nothing about
+            # operators: node attributes are absent on LARGE canvases (size-dependent
+            # visualizer bug — docs/visualizer/BUG-REPORT-node-hydration.md), where no
+            # rule of any operator can match. On small/filtered canvases rules work.
+            # First match wins: attention states first. Closed keeps the user's grey.
+            "rules": [
+                _rule("status", "string", "=", "open", "#e53e3e"),
+                _rule("status", "string", "=", "undocumented", "#d69e2e"),
+                _rule("status", "string", "=", "closed", "#a39fa1"),
+            ],
+        },
+        # The other two status-bearing vertex collections (values from live census
+        # 2026-08-26: review_state accepted/proposed; state acknowledged/unprocessed/
+        # promoted/duplicate).
+        "prd_patches": {
+            "background": {"color": "#805ad5", "iconName": "mdi:file-document-edit"},
+            "labelAttribute": "req_id",
+            "hoverInfoAttributes": ["delta_type", "review_state",
+                                    "project_id", "justification"],
+            "rules": [
+                _rule("review_state", "string", "=", "proposed", "#d69e2e"),
+                _rule("review_state", "string", "=", "rejected", "#e53e3e"),
+                _rule("review_state", "string", "=", "accepted", "#38a169"),
+                _rule("review_state", "string", "=", "superseded", "#a39fa1"),
+            ],
+        },
+        "sync_observations": {
+            "background": {"color": "#4a5568", "iconName": "mdi:eye"},
+            "labelAttribute": "req_id",
+            "hoverInfoAttributes": ["observation_type", "state", "summary", "project_id"],
+            "rules": [
+                _rule("state", "string", "=", "unprocessed", "#d69e2e"),
+                _rule("state", "string", "=", "promoted", "#38a169"),
+                _rule("state", "string", "=", "acknowledged", "#a39fa1"),
+                _rule("state", "string", "=", "duplicate", "#a39fa1"),
+            ],
         },
     }
     edge_config = {
@@ -274,12 +294,18 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
         "pattern_addresses_requirement": _edge("#dd6b20"),  # addresses (orange)
         "pattern_supersedes": _edge("#e53e3e"),            # supersedes (red)
         "requirement_depends_on": _edge("#805ad5"),        # dependency (purple)
+        "patch_from_project": _edge("#805ad5", 1.0),       # provenance (purple)
+        "observation_from_project": _edge("#a0aec0", 1.0),  # provenance (light grey)
     }
     return {
         "graphId": graph_id, "name": THEME_NAME,
-        "description": "Shared-memory graph: patterns (blue; green=reused, gold=high-importance), "
-                       "projects (purple), drift alerts (red=OPEN, amber=undocumented, "
-                       "pale grey=closed).",
+        "description": "Shared-memory graph. Alerts: red=OPEN, amber=undocumented, grey=closed. "
+                       "Patches: amber=proposed, green=accepted. Observations: amber=unprocessed, "
+                       "green=promoted, grey=acknowledged. Patterns: green=reused, "
+                       "gold=high-importance. NOTE: on LARGE canvases a visualizer bug leaves "
+                       "nodes without attributes — colours/labels degrade and Properties shows "
+                       "stubs; do not edit documents there (see "
+                       "docs/visualizer/BUG-REPORT-node-hydration.md).",
         "isDefault": is_default,
         "nodeConfigMap": node_config, "edgeConfigMap": edge_config,
     }
