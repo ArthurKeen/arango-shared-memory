@@ -22,6 +22,13 @@ except Exception:
 if [ -f .no-drift-gate ]; then
   COUNT=0
 else
+  # Recover edits the PostToolUse hook could not see before counting. It fires on
+  # Write|Edit and reads tool_input.file_path; a Bash heredoc, `sed -i`, a generated
+  # script or an external editor carries none, so those edits queue nothing and this
+  # gate would pass a session with unaudited changes. The reconciler asks git instead.
+  # Fails open (not a git repo, git missing, any error -> queues nothing), so a
+  # failure here degrades to the old behaviour rather than trapping the session.
+  python3 .claude/hooks/reconcile_drift_queue.py 2>/dev/null || true
   COUNT=$(ls .prd-drift-queue 2>/dev/null | wc -l | tr -d ' ')
 fi
 case "$COUNT" in ''|*[!0-9]*) exit 0;; esac

@@ -39,7 +39,19 @@ query: FOR o IN sync_observations
          SORT o.created_at RETURN o
 bind_vars: { "pid": "<PROJECT_ID>" }
 ```
-Mark each observation you actually use as acknowledged (`UPDATE o WITH { state: "acknowledged" }`).
+Mark each observation you actually use as acknowledged. Use `upsert-document`, **not** a
+raw AQL `UPDATE` — mutating AQL is refused by the policy layer (see the mutation-gate note
+in Phase 4):
+
+```
+Use tool: upsert-document   collection_name: "sync_observations"
+search_fields: { "_key": "<observation _key>" }
+document_data: { "_key": "<observation _key>", "project_id": "<PROJECT_ID>",
+                 "state": "acknowledged" }
+update_data:   { "state": "acknowledged", "acknowledged_at": "<ISO timestamp>",
+                 "resolution": "<what closed it, with file:line where relevant>" }
+```
+
 Skip silently if the collection doesn't exist (backend not yet migrated).
 
 Then parse the PRD and extract every distinct, testable requirement. A requirement is any statement that describes what the system MUST, SHOULD, or SHALL do.
@@ -159,6 +171,18 @@ closed_at: "<ISO timestamp>"
 closed_evidence: "<file:line>"
 ```
 
+> **Mutation gate — this will bite on a sync that finds real gaps.** The MCP policy
+> layer classifies every call. Tools declared `confirmation: none` (`upsert-document`,
+> `update-document`) run freely. Tools declared `conditional` — **`save-drift-alert`**
+> and `execute-aql-query` — demand a short-lived `confirmation_token` the moment the
+> call is classified as a mutation. That token is minted out-of-band by a human
+> (`scripts/mint_confirmation.py`, signed with `MCP_CONFIRMATION_SECRET`); an agent
+> cannot mint its own. If that secret is not configured on the server, the gate fails
+> **closed** with `confirmation_not_configured`. When that happens, fall back to
+> `upsert-document` into `drift_alerts` and say so in the report — the alert will lack
+> its `alert_from_project` provenance edge until `phase2_setup.py` next runs. Never
+> write drift results with a raw AQL `INSERT`/`UPDATE`; the same gate refuses them.
+
 > If your MCP server predates `save-drift-alert`, reload it; as a last resort you
 > can still `upsert-document` into `drift_alerts`, but that leaves the alert an
 > orphan until `phase2_setup.py` next runs.
@@ -267,15 +291,32 @@ audit waiting, and never apply.
 implementation: which file, what function/class/middleware, any dependency changes.
 Do not implement without user confirmation.
 
-**6c — Clear the drift queue (must be the last step).** Only after every accepted patch has
-been written to disk:
+**6c — Clear the drift queue + stamp the audit point (must be the last step).** Only after
+every accepted patch has been written to disk:
 
 ```bash
 rm -f .prd-drift-queue/*
+mkdir -p .prd-drift-queue   # `rm -f dir/*` leaves the dir, but a fresh clone has none
+git rev-parse HEAD > .prd-drift-queue/.last-sync 2>/dev/null || true
 ```
+
+The stamp records **which commit this audit covered**, so the Stop-time reconciler
+(`.claude/hooks/reconcile_drift_queue.py`) can queue markers for anything committed *after*
+it. Without the stamp the reconciler sees only uncommitted work, and changes that were
+committed and then audited-past would slip through. `.last-sync` is a **dotfile
+deliberately**: `rm -f .prd-drift-queue/*` does not match it and `ls` does not count it, so
+it survives the clear above and never inflates the gate's count. Write it *after* the `rm`,
+never before.
 
 If the sync is abandoned before this point the queue survives **by design** — the audit did
 not finish, so the gate should still fire. Do not clear it early to silence the gate.
+
+> **Why the reconciler exists.** The PostToolUse hook fires on `Write|Edit` and reads
+> `tool_input.file_path`. A Bash call carries none, so a `cat > f <<EOF` heredoc, `sed -i`,
+> a generated script, or an edit made outside the session queues **nothing** — and this gate
+> only counts markers. Agents are actively steered toward the shell by tool-preference
+> settings, so that is the common path, not an edge case. The reconciler asks
+> `git status` / `git diff` what actually changed instead of trying to parse shell.
 
 ---
 
