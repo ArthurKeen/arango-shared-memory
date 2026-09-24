@@ -28,6 +28,39 @@ bind_vars: { "pid": "<PROJECT_ID>" }
 If they differ (or no hash is stored), note in the report: **"PRD changed since last sync"** —
 requirement numbering may have shifted, so re-extract everything rather than assuming prior REQ ids.
 
+**Branch guard — decide the SYNC MODE before anything else writes.** The shared drift
+baseline (`prd_sha256`, `drift_alerts`, `prd_patches`) is per-project, **not per-branch**.
+Running the write phases against a PRD that differs from the default branch moves the
+team's baseline to unmerged content and feeds phantom gaps into every teammate's session
+digest. The SOP ("spec changes are their own PR, merged first") is enforced *here*, at the
+write boundary, so it does not depend on anyone remembering it:
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "no-git")
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "no-git")
+# default branch: origin/HEAD if set, else main, else master
+DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||')
+[ -z "$DEFAULT" ] && { git show-ref -q refs/remotes/origin/main && DEFAULT=main || DEFAULT=master; }
+git fetch origin --quiet 2>/dev/null || true          # best effort; do not block on network
+git diff --quiet "origin/${DEFAULT}" -- "<PRD_FILE>" 2>/dev/null; PRD_DIFFERS=$?
+```
+
+Decide the mode (record `BRANCH`, `COMMIT`, and the mode in the report header):
+- **No `origin` remote at all** → `SHARED`. A purely local repo has nothing to diverge from.
+- **PRD identical to `origin/${DEFAULT}`** (`PRD_DIFFERS` = 0) → `SHARED`, on any branch:
+  the audit runs against the agreed contract, which is exactly what a feature branch wants.
+- **PRD differs from `origin/${DEFAULT}`** (`PRD_DIFFERS` = 1) → `LOCAL-ONLY`.
+- **Comparison impossible** (`PRD_DIFFERS` > 1: no such ref, fetch failed and no local
+  copy of the default ref) → `LOCAL-ONLY`, and say why. When the hazard cannot be ruled
+  out, shared state stays untouched — fail closed on writes, never on the audit itself.
+
+**`LOCAL-ONLY` mode:** Phases 1–3 (extraction, audit, evidence gate, drift report) run in
+full. **Skip Phases 4, 4b, 4c and the registry update entirely**, and **do not accept PRD
+patches in Phase 6a** (accepting one edits the PRD outside a spec PR). Phase 6c may still
+clear the queue — the audit happened. Emit prominently:
+`[PRD-SYNC] LOCAL-ONLY: PRD differs from origin/${DEFAULT} (branch: ${BRANCH}) — shared
+baseline untouched. Merge the spec PR, then re-run /prd-sync to publish.`
+
 ### Phase 1 — Extract requirements (+ consume prior observations)
 First pull this project's unprocessed observations — discoveries from earlier audits that were
 recorded but not yet acted on. Use them as hints (ambiguities already found, edge cases already
@@ -136,7 +169,11 @@ OUTDATED-PRD (U):
   Proposed patch: <one-line summary; full patch persisted in Phase 4b>
 ```
 
-### Phase 4 — Write to ArangoDB (skip if MCP unavailable)
+### Phase 4 — Write to ArangoDB (skip if MCP unavailable; **SHARED mode only** — in LOCAL-ONLY skip 4/4b/4c and the registry update)
+
+Every write below carries `branch` and `commit` from Phase 0. This is the provenance that
+makes branch-era writes auditable later (and lets a future pass verify that a closing
+commit actually reached the default branch before treating the close as final).
 
 For each MISSING or PARTIAL requirement, write a drift alert with **`save-drift-alert`**
 (NOT a raw `upsert-document` into `drift_alerts`). This tool upserts the alert AND
@@ -153,6 +190,8 @@ status: "open"
 evidence: "<file:line or empty>"
 gap_description: "<what is missing>"
 detected_at: "<ISO timestamp>"
+branch: "<BRANCH from Phase 0>"
+commit: "<COMMIT from Phase 0>"
 ```
 
 It is idempotent on `<PROJECT_ID>_<REQ_ID>`: identity (`project_id`/`req_id`) is
@@ -169,6 +208,8 @@ req_id: "<REQ-NNN>"
 status: "closed"
 closed_at: "<ISO timestamp>"
 closed_evidence: "<file:line>"
+branch: "<BRANCH from Phase 0>"
+commit: "<COMMIT from Phase 0>"
 ```
 
 > **Mutation gate — this will bite on a sync that finds real gaps.** The MCP policy
@@ -204,9 +245,12 @@ document_data: {
   "proposed_patch": "<the exact replacement/additional PRD text>",
   "justification": "<why the PRD, not the code, should change>",
   "review_state": "proposed",
-  "created_at": "<ISO timestamp>"
+  "created_at": "<ISO timestamp>",
+  "branch": "<BRANCH from Phase 0>",
+  "commit": "<COMMIT from Phase 0>"
 }
-update_data: { "observed": "<...>", "proposed_patch": "<...>", "justification": "<...>" }
+update_data: { "observed": "<...>", "proposed_patch": "<...>", "justification": "<...>",
+               "branch": "<BRANCH from Phase 0>", "commit": "<COMMIT from Phase 0>" }
 ```
 Re-detection merges into the same key; a patch already `accepted`/`rejected`/`superseded` is
 never flipped back to `proposed` — create a new dated key if the situation genuinely changed.
@@ -232,7 +276,9 @@ document_data: {
   "severity": "low" | "medium" | "high",
   "state": "unprocessed",
   "source": "prd-sync",
-  "created_at": "<ISO timestamp>"
+  "created_at": "<ISO timestamp>",
+  "branch": "<BRANCH from Phase 0>",
+  "commit": "<COMMIT from Phase 0>"
 }
 ```
 
@@ -257,7 +303,9 @@ update_data: {
   "last_sync": "<ISO timestamp>",
   "open_gaps": <count of MISSING + PARTIAL>,
   "prd_sha256": "<hash from Phase 0>",
-  "prd_checked_at": "<ISO timestamp>"
+  "prd_checked_at": "<ISO timestamp>",
+  "last_sync_branch": "<BRANCH from Phase 0>",
+  "last_sync_commit": "<COMMIT from Phase 0>"
 }
 ```
 
