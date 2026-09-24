@@ -48,6 +48,19 @@ CLAUDE_SKILL_FILES = (
     "arangodb-visualizer-customizer/SKILL.md",
     "arangodb-visualizer-customizer/examples.md",
 )
+# Projects this tool must never touch, and why. A rollout here is not a refresh — for a
+# repo that TRACKS .claude/ in a public, PR-governed repository it is an unreviewed change
+# to published content, which is why contextual-data-fabric was fully restored on
+# 2026-08-26 (see docs/scorecard.md, C2 decision). Without this list the very next --apply
+# silently re-does what that restore undid.
+#
+# A project can also opt out on its own by creating a `.no-shared-memory-rollout` file in
+# its root — same spirit as the `.no-drift-gate` bypass. Prefer the marker for repos whose
+# owners decide for themselves; use this list when the exclusion is ours to remember.
+EXCLUDED_PROJECTS = (
+    "contextual-data-fabric",   # tracks .claude/ in a public repo; enforcement belongs in a reviewed PR there
+)
+OPT_OUT_MARKER = ".no-shared-memory-rollout"
 IGNORE_LINES = (
     ".cursor/.shared-memory-sessions/",
     ".cursor/hooks.json.pre-update.*",
@@ -87,6 +100,9 @@ def discover(root: Path) -> list[Path]:
             dirs[:] = []
             continue
         if is_bootstrapped(here):
+            if here.name in EXCLUDED_PROJECTS or (here / OPT_OUT_MARKER).is_file():
+                dirs[:] = []          # recognised, deliberately skipped
+                continue
             projects.append(here)
             dirs[:] = []
     return sorted(projects)

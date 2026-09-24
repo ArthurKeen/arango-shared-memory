@@ -50,6 +50,30 @@ class TestRolloutCursorHooks(unittest.TestCase):
         self.assertIn(skills_only, found)
         self.assertIn(self.project, found)
 
+    def test_excluded_projects_are_never_discovered(self):
+        """A named exclusion must survive every future --apply.
+
+        contextual-data-fabric tracks .claude/ in a public, PR-governed repo, so a
+        rollout there is an unreviewed change to published content; it was fully
+        restored on 2026-08-26 for exactly that reason. Without this, the next
+        --apply silently redoes what that restore undid.
+        """
+        excluded = Path(self.temp.name) / self.mod.EXCLUDED_PROJECTS[0]
+        (excluded / ".claude" / "hooks").mkdir(parents=True)
+        (excluded / ".claude" / "hooks" / "session_recall.py").write_text("x\n", encoding="utf-8")
+        found = self.mod.discover(Path(self.temp.name))
+        self.assertNotIn(excluded, found, "excluded project was discovered")
+        self.assertIn(self.project, found, "exclusion must not suppress other projects")
+
+    def test_a_project_can_opt_out_with_a_marker_file(self):
+        """Self-service opt-out, mirroring the .no-drift-gate bypass convention."""
+        optout = Path(self.temp.name) / "opted-out"
+        (optout / ".claude" / "hooks").mkdir(parents=True)
+        (optout / ".claude" / "hooks" / "session_recall.py").write_text("x\n", encoding="utf-8")
+        self.assertIn(optout, self.mod.discover(Path(self.temp.name)))
+        (optout / self.mod.OPT_OUT_MARKER).write_text("", encoding="utf-8")
+        self.assertNotIn(optout, self.mod.discover(Path(self.temp.name)))
+
     def test_discovery_still_ignores_unrelated_repos(self):
         """Widening the predicate must not widen the blast radius."""
         for name, rel in (("plain", None),
