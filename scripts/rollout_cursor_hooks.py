@@ -38,6 +38,7 @@ CLAUDE_HOOK_FILES = (
     "pattern_apply_tracker.py",
     "dismiss_surfaced.py",
     "reconcile_drift_queue.py",
+    "capture_candidates.py",
 )
 # Skills were never synced by this tool, only placed once by bootstrap_project.sh (which
 # skips existing files). The result was silent permanent drift: as of 2026-08-25, 29 of 32
