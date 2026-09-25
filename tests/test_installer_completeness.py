@@ -26,6 +26,7 @@ be updated after bootstrap — silent permanent drift.
 Stdlib-only and source-level, like the other guards here: CI installs no dependencies.
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -45,10 +46,41 @@ EXEMPT: set[str] = set()
 # existence check reports the entire fleet missing. (It did, on first run.)
 REF_RE = re.compile(r"\.claude/((?:hooks|skills)/[A-Za-z0-9_/-]+\.(?:py|sh))")
 
+# A hook can also depend on a sibling by IMPORTING it — no path string anywhere, so the
+# reference scan above is blind to it. reconcile_drift_queue.py does exactly this
+# (`from drift_queue import classify, enqueue, ...`), and the failure mode is nastier:
+# the file installs fine, then raises ImportError at runtime on any project whose
+# drift_queue.py predates the functions it wants — swallowed by the gate's `|| true`.
+# Found by Lokesh while testing PR #1, against a revision of this guard that stayed
+# green straight through it.
+IMPORT_RE = re.compile(r"^\s*(?:from\s+([a-z_][a-z0-9_]*)\s+import|import\s+([a-z_][a-z0-9_]*))",
+                       re.MULTILINE)
+
 
 def _read(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _imported_siblings():
+    """hooks/<x>.py for every sibling module a hook imports.
+
+    Only names resolving to a real file in templates/.claude/hooks/ count, so stdlib
+    imports are ignored without maintaining a denylist.
+    """
+    hooks_dir = os.path.join(TEMPLATES, "hooks")
+    if not os.path.isdir(hooks_dir):
+        return set()
+    found: set[str] = set()
+    for name in os.listdir(hooks_dir):
+        if not name.endswith(".py"):
+            continue
+        for a, b in IMPORT_RE.findall(_read(os.path.join(hooks_dir, name))):
+            mod = a or b
+            if mod and mod + ".py" != name and os.path.isfile(
+                    os.path.join(hooks_dir, mod + ".py")):
+                found.add(f"hooks/{mod}.py")
+    return found
 
 
 def _referenced_artifacts():
@@ -70,8 +102,11 @@ def _referenced_artifacts():
 class TestInstallerCompleteness(unittest.TestCase):
     def setUp(self):
         self.bootstrap = _read(BOOTSTRAP)
-        self.rollout = _read(ROLLOUT)
-        self.referenced = _referenced_artifacts()
+        spec = importlib.util.spec_from_file_location("rollout_cursor_hooks", ROLLOUT)
+        self.rollout_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.rollout_mod)
+        # A dependency is a dependency whether named by path or by import.
+        self.referenced = _referenced_artifacts() | _imported_siblings()
 
     def test_scanner_finds_the_known_references(self):
         """Guard the guard: a regex that silently matches nothing would pass everything.
@@ -83,6 +118,9 @@ class TestInstallerCompleteness(unittest.TestCase):
             len(self.referenced), 6,
             f"reference scan found only {len(self.referenced)} artifacts — the scanner "
             f"is broken, not the installers: {sorted(self.referenced)}")
+        self.assertIn("hooks/drift_queue.py", self.referenced,
+                      "import-dependency scan is broken: reconcile_drift_queue.py "
+                      "imports drift_queue, which must count as a dependency")
         for expected in ("reconcile_drift_queue.py", "session_recall.py",
                          "prd-sync/check_evidence.py"):
             self.assertTrue(
@@ -97,10 +135,27 @@ class TestInstallerCompleteness(unittest.TestCase):
                 os.path.isfile(os.path.join(TEMPLATES, rel)),
                 f"{rel} is referenced but does not exist in templates/.claude/")
 
+    def _rollout_ships(self, rel):
+        """Membership in the real tuples — NOT a substring search of the source.
+
+        Substring matching gave a false negative that let a real orphan through:
+        "drift_queue.py" is a substring of "shared_memory_drift_queue.py" in
+        CURSOR_HOOK_FILES, so the Claude hook looked shipped while CLAUDE_HOOK_FILES
+        did not list it at all.
+        """
+        kind, _, name = rel.partition("/")
+        if kind == "hooks":
+            return name in self.rollout_mod.CLAUDE_HOOK_FILES
+        return name in self.rollout_mod.CLAUDE_SKILL_FILES
+
+    def _bootstrap_places(self, rel):
+        """An exact `place ".claude/<rel>"` line, for the same reason."""
+        return re.search(rf'place\s+"\.claude/{re.escape(rel)}"', self.bootstrap) is not None
+
     def test_every_referenced_artifact_is_placed_by_bootstrap(self):
         """New projects must receive it."""
         missing = [rel for rel in sorted(self.referenced)
-                   if rel not in EXEMPT and os.path.basename(rel) not in self.bootstrap]
+                   if rel not in EXEMPT and not self._bootstrap_places(rel)]
         self.assertEqual(
             missing, [],
             "referenced but not placed by bootstrap_project.sh — new projects will be "
@@ -113,7 +168,7 @@ class TestInstallerCompleteness(unittest.TestCase):
         it was bootstrapped with, and no rollout will ever correct it.
         """
         missing = [rel for rel in sorted(self.referenced)
-                   if rel not in EXEMPT and os.path.basename(rel) not in self.rollout]
+                   if rel not in EXEMPT and not self._rollout_ships(rel)]
         self.assertEqual(
             missing, [],
             "referenced but not refreshed by rollout_cursor_hooks.py — permanently "
@@ -130,8 +185,10 @@ class TestInstallerCompleteness(unittest.TestCase):
                             self.assertTrue(
                                 os.path.isfile(os.path.join(TEMPLATES, rel)),
                                 f"{event} hook points at missing {rel}")
-                            self.assertIn(os.path.basename(rel), self.bootstrap)
-                            self.assertIn(os.path.basename(rel), self.rollout)
+                            self.assertTrue(self._bootstrap_places(rel),
+                                            f"{rel} not placed by bootstrap")
+                            self.assertTrue(self._rollout_ships(rel),
+                                            f"{rel} not refreshed by rollout")
 
 
 if __name__ == "__main__":
