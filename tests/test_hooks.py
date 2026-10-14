@@ -228,6 +228,9 @@ class TestReconcileAgainstAuditedTree(TmpProject):
 
     GIT = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
 
+    #: Contents of the project's .gitignore, or None for no .gitignore at all.
+    GITIGNORE = None
+
     def setUp(self):
         super().setUp()
         hooks = os.path.join(self.cwd, ".claude", "hooks")
@@ -235,6 +238,8 @@ class TestReconcileAgainstAuditedTree(TmpProject):
         for name in ("drift_queue.py", "reconcile_drift_queue.py"):
             shutil.copy(os.path.join(HOOKS, name), hooks)
         self._write("app.py", "x = 1\n")
+        if self.GITIGNORE is not None:
+            self._write(".gitignore", self.GITIGNORE)
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("commit", "-qm", "init")
@@ -344,6 +349,22 @@ class TestReconcileAgainstAuditedTree(TmpProject):
         self.assertEqual(comparable(after), comparable(before))
         staged = subprocess.run(self.GIT + ["diff", "--cached", "--quiet"], cwd=self.cwd)
         self.assertEqual(staged.returncode, 0, "real index was modified")
+
+
+class TestReconcileWithBootstrapGitignore(TestReconcileAgainstAuditedTree):
+    """Every test above, in a repo whose .gitignore is what bootstrap_project.sh writes.
+
+    Regression for the first version of the tree stamp (2026-09-30): the snapshot staged
+    with an exclude pathspec naming `.prd-drift-queue`, and once that directory is
+    gitignored — which bootstrap does in every project — git reports the pathspec as an
+    attempt to add an ignored path and exits 1. The snapshot then read as failed,
+    mark-synced wrote a legacy commit stamp, and the reconciler fell back to the old
+    scan: the endless re-queue loop came back in exactly the standard configuration,
+    while every test passed because no test repo ignored the queue directory.
+    """
+
+    GITIGNORE = (".prd-drift-queue/\n.pattern-capture-queue/\n.claude/\nCLAUDE.md\n"
+                 ".no-drift-gate\n")
 
 
 class TestCaptureMiner(unittest.TestCase):
