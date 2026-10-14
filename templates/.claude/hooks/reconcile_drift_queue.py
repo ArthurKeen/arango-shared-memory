@@ -114,9 +114,18 @@ def snapshot_tree():
             # so remove the placeholder and let `git add` create a fresh one.
             os.remove(scratch)
         env = dict(os.environ, GIT_INDEX_FILE=scratch)
-        staged = _git("add", "-A", "--", ":/", f":(top,exclude){QUEUE_DIR}",
-                      timeout=SNAPSHOT_TIMEOUT, env=env)
-        if staged is None:
+        # Stage everything, THEN drop the queue dir from the scratch index. Do not
+        # exclude it with a pathspec on `git add`: in a project whose .gitignore lists
+        # the queue dir — bootstrap_project.sh writes that into every project — git
+        # treats a pathspec naming an ignored path as an attempt to add it, prints
+        # "paths are ignored", and exits 1. That made every snapshot read as failed in
+        # the standard configuration, silently restoring the re-queue loop this module
+        # exists to end. `rm --cached --ignore-unmatch` exits 0 whether the dir is
+        # ignored (nothing staged, nothing to drop) or not (markers staged, dropped).
+        if _git("add", "-A", "--", ":/", timeout=SNAPSHOT_TIMEOUT, env=env) is None:
+            return None
+        if _git("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
+                f":(top){QUEUE_DIR}", timeout=SNAPSHOT_TIMEOUT, env=env) is None:
             return None
         tree = _git("write-tree", timeout=SNAPSHOT_TIMEOUT, env=env)
         if tree is None:
