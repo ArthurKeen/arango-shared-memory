@@ -184,6 +184,44 @@ class TestRolloutCursorHooks(unittest.TestCase):
         status, changes = self.mod.install(self.project, apply=True, stamp="test2")
         self.assertEqual((status, changes), ("unchanged", []))
 
+    def test_apply_installs_and_refreshes_the_estate_rules(self):
+        """A verbatim rule lands in .cursor/rules, a drifted copy is backed up, and
+        a second pass is a no-op.
+
+        bootstrap_project.sh places a rule once and skips existing files, so without
+        this a rule fixed in templates/ would never reach a project bootstrapped
+        before the fix.
+        """
+        rel = ".cursor/rules/fix-upstream-dont-fork.mdc"
+        self.assertIn("fix-upstream-dont-fork.mdc", self.mod.CURSOR_RULE_FILES)
+        src = self.mod.TEMPLATE_ROOT / "rules" / "fix-upstream-dont-fork.mdc"
+        dst = self.project / rel
+
+        status, changes = self.mod.install(self.project, apply=True, stamp="r1")
+        self.assertEqual(status, "updated")
+        self.assertIn(rel, changes)
+        self.assertEqual(dst.read_bytes(), src.read_bytes())
+        self.assertFalse(dst.stat().st_mode & 0o100, "a rule is a document, not executable")
+
+        dst.write_text("# an old, drifted rule\n", encoding="utf-8")
+        _, changes = self.mod.install(self.project, apply=True, stamp="r2")
+        self.assertIn(rel, changes)
+        backup = dst.with_name(f"{dst.name}.pre-update.r2")
+        self.assertEqual(backup.read_text(encoding="utf-8"), "# an old, drifted rule\n")
+        self.assertEqual(dst.read_bytes(), src.read_bytes())
+        self.assertIn(
+            ".cursor/rules/*.mdc.pre-update.*",
+            (self.project / ".gitignore").read_text(encoding="utf-8"),
+        )
+
+        _, changes = self.mod.install(self.project, apply=True, stamp="r3")
+        self.assertNotIn(rel, changes)
+
+    def test_the_rendered_workflow_rule_is_not_refreshed(self):
+        """workflow.mdc is rendered per project; comparing it byte-for-byte with the
+        template would overwrite every project's PRD path."""
+        self.assertNotIn("workflow.mdc", self.mod.CURSOR_RULE_FILES)
+
     def test_every_hook_the_stop_gate_names_is_shipped(self):
         """The gate runs its helper scripts with `|| true`, so a missing one fails silently.
 

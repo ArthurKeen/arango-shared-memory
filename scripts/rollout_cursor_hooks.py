@@ -4,7 +4,8 @@
 Projects are discovered by any canonical bootstrap marker, so unrelated repositories
 under the scan root are untouched. Existing Cursor hooks are
 merged by event/command; unrelated hook entries are preserved. The canonical
-Claude digest/stop/apply hooks are refreshed at the same time.
+Claude digest/stop/apply hooks, the skills, and the estate-wide Cursor rules that
+are copied verbatim are refreshed at the same time.
 """
 
 from __future__ import annotations
@@ -45,6 +46,11 @@ CLAUDE_HOOK_FILES = (
 # deployed copies of prd-sync/SKILL.md still had the Phase-5 drift-queue loop bug and the
 # pre-AGENTS.md identity path, and one project was 140 lines behind. Unlike hooks these are
 # nested paths, so they carry their subdirectory.
+# Estate-wide rules copied verbatim. workflow.mdc is NOT here: bootstrap renders it
+# per project, so a byte comparison would report every project as drifted.
+CURSOR_RULE_FILES = (
+    "fix-upstream-dont-fork.mdc",
+)
 CLAUDE_SKILL_FILES = (
     "prd-sync/SKILL.md",
     "prd-sync/check_evidence.py",
@@ -70,6 +76,7 @@ IGNORE_LINES = (
     ".cursor/.shared-memory-sessions/",
     ".cursor/hooks.json.pre-update.*",
     ".cursor/hooks/*.pre-update.*",
+    ".cursor/rules/*.mdc.pre-update.*",
 )
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "build", "dist"}
 
@@ -192,6 +199,7 @@ def install(project: Path, *, apply: bool, stamp: str) -> tuple[str, list[str]]:
     changes: list[str] = []
     cursor_dir = project / ".cursor"
     hooks_dir = cursor_dir / "hooks"
+    rules_dir = cursor_dir / "rules"
     hooks_json = cursor_dir / "hooks.json"
     template_json = _load_json(TEMPLATE_ROOT / "hooks.json")
     claude_dir = project / ".claude"
@@ -217,6 +225,11 @@ def install(project: Path, *, apply: bool, stamp: str) -> tuple[str, list[str]]:
         dst = hooks_dir / name
         if not dst.exists() or src.read_bytes() != dst.read_bytes():
             changes.append(f".cursor/hooks/{name}")
+    for name in CURSOR_RULE_FILES:
+        src = TEMPLATE_ROOT / "rules" / name
+        dst = rules_dir / name
+        if not dst.exists() or src.read_bytes() != dst.read_bytes():
+            changes.append(f".cursor/rules/{name}")
     for name in CLAUDE_HOOK_FILES:
         src = CLAUDE_TEMPLATE_ROOT / "hooks" / name
         dst = claude_hooks_dir / name
@@ -260,6 +273,16 @@ def install(project: Path, *, apply: bool, stamp: str) -> tuple[str, list[str]]:
             _backup(dst, stamp)
         shutil.copy2(src, dst)
         dst.chmod(dst.stat().st_mode | stat.S_IXUSR)
+    for name in CURSOR_RULE_FILES:
+        if f".cursor/rules/{name}" not in changes:
+            continue
+        src = TEMPLATE_ROOT / "rules" / name
+        dst = rules_dir / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            _backup(dst, stamp)
+        shutil.copy2(src, dst)
+        # no chmod +x: a rule is a document.
     for name in CLAUDE_HOOK_FILES:
         rel = f".claude/hooks/{name}"
         if rel not in changes:
