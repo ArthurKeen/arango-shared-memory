@@ -190,6 +190,30 @@ class TestInstallerCompleteness(unittest.TestCase):
                             self.assertTrue(self._rollout_ships(rel),
                                             f"{rel} not refreshed by rollout")
 
+    def test_every_cursor_rule_template_reaches_both_installers(self):
+        """A rule in templates/.cursor/rules/ is shipped by bootstrap AND rollout.
+
+        workflow.mdc is the one exception, stated here: bootstrap renders it per
+        project, so rollout cannot byte-compare it. Every other rule is copied
+        verbatim (`place ... 0`) and listed in CURSOR_RULE_FILES.
+        """
+        rules_dir = os.path.join(REPO, "templates", ".cursor", "rules")
+        rules = sorted(name for name in os.listdir(rules_dir) if name.endswith(".mdc"))
+        self.assertIn("fix-upstream-dont-fork.mdc", rules)
+        for name in rules:
+            with self.subTest(rule=name):
+                placed = re.search(
+                    rf'place\s+"\.cursor/rules/{re.escape(name)}"\s+(\d)', self.bootstrap)
+                self.assertIsNotNone(placed, f"bootstrap_project.sh never places {name}")
+                if name == "workflow.mdc":
+                    self.assertEqual(placed.group(1), "1", "workflow.mdc must be rendered")
+                    self.assertNotIn(name, self.rollout_mod.CURSOR_RULE_FILES)
+                    continue
+                self.assertEqual(placed.group(1), "0",
+                                 f"{name} must be copied verbatim so rollout can refresh it")
+                self.assertIn(name, self.rollout_mod.CURSOR_RULE_FILES,
+                              f"{name} not refreshed by rollout_cursor_hooks.py")
+
 
 if __name__ == "__main__":
     unittest.main()

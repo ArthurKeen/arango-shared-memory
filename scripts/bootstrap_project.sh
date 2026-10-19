@@ -139,6 +139,8 @@ place ".claude/skills/pattern-search/SKILL.md" 0
 place ".claude/skills/arangodb-visualizer-customizer/SKILL.md" 0
 place ".claude/skills/arangodb-visualizer-customizer/examples.md" 0
 place ".cursor/rules/workflow.mdc" 1
+# Copied verbatim (not rendered), so rollout_cursor_hooks.py can refresh it too.
+place ".cursor/rules/fix-upstream-dont-fork.mdc" 0
 place ".cursor/hooks.json" 0
 place ".cursor/hooks/shared_memory_session_start.py" 0
 place ".cursor/hooks/shared_memory_drift_queue.py" 0
@@ -151,7 +153,7 @@ place ".cursor/hooks/shared_memory_stop_gate.py" 0
 GI="$TARGET/.gitignore"
 for entry in ".prd-drift-queue/" ".pattern-capture-queue/" ".claude/" "CLAUDE.md" ".no-drift-gate" \
              ".cursor/.shared-memory-sessions/" "CLAUDE.md.pre-update.*" \
-             ".cursor/rules/workflow.mdc.pre-update.*" ".cursor/hooks.json.pre-update.*" \
+             ".cursor/rules/workflow.mdc.pre-update.*" ".cursor/rules/*.mdc.pre-update.*" ".cursor/hooks.json.pre-update.*" \
              ".cursor/hooks/*.pre-update.*"; do
   if [ ! -f "$GI" ] || ! grep -qxF "$entry" "$GI"; then
     echo "$entry" >> "$GI"
