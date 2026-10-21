@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -50,7 +51,7 @@ def _drift_counts() -> tuple[int, int]:
 
 def _mine_capture_candidates(payload: dict[str, Any]) -> None:
     """Best-effort reuse of the Claude miner when transcript shapes are compatible."""
-    try:
+    with contextlib.suppress(Exception):
         subprocess.run(
             [sys.executable, ".claude/hooks/capture_candidates.py"],
             input=json.dumps(payload),
@@ -59,15 +60,11 @@ def _mine_capture_candidates(payload: dict[str, Any]) -> None:
             timeout=7,
             check=False,
         )
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _cleanup_state(payload: dict[str, Any]) -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.remove(_state_path(payload))
-    except OSError:
-        pass
 
 
 def followup(payload: dict[str, Any]) -> str:

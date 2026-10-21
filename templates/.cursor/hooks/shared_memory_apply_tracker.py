@@ -9,6 +9,7 @@ unaccounted for.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -45,10 +46,8 @@ def _save(path: str, state: dict[str, Any]) -> None:
             json.dump(state, fh, indent=2, sort_keys=True)
         os.replace(tmp, path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(tmp)
-        except OSError:
-            pass
 
 
 def _json_value(value: Any) -> Any:
