@@ -25,8 +25,20 @@ on purpose:
                                   row was never cleared
                                 - orphaned: the project is not in project_registry
                                   at all (renamed, archived, or never registered)
-                                - ancient: older than --stale-days (default 60) with
-                                  no closing evidence
+                                - ancient: older than --stale-days (default 60), with
+                                  no closing evidence, AND belonging to a project whose
+                                  last /prd-sync is also older than the threshold
+
+The project-activity half of that last test is not a refinement, it is the whole
+correctness of it. The first version asked only how old the ALERT was, and that is the
+wrong question: a project can go quiet for a month and come back. arangodb-data-tools-rs
+did exactly that -- 27 commits in June tapering to 5 in August, then 39 days of silence,
+then 18 commits in October, a v0.1.0 tag on the 19th, and a /prd-sync on the 21st. Its 36
+open alerts were detected in August (35 of 36), so the alert-age test marked every one of
+them ancient and the first --age-out dry run proposed sweeping the whole set -- from the
+most active project in the fleet, whose gaps are live tracked work against 130
+requirements. A sample taken in September would have looked terminal and been wrong.
+Dormancy is a property of the PROJECT, not of the timestamp on a row.
 
 READ-ONLY BY DEFAULT. `--age-out` is the "cap them on purpose" path: it moves
 ancient open alerts to status 'stale' — NOT deleted, NOT closed. A close asserts
@@ -163,12 +175,35 @@ FOR a IN drift_alerts FILTER a.status == "open"
   SORT n DESC RETURN { project, n }
 """
 
+# Compared on the DATE PREFIX, not the whole string: registry timestamps carry mixed
+# forms ("2026-10-21T00:00:00Z" alongside "2026-10-01T19:24:00-06:00"), and a plain
+# string compare across offsets is lexicographically wrong. Day granularity is ample
+# for a 60-day threshold.
 ANCIENT_AQL = """
+LET dormant = (FOR r IN project_registry
+               FILTER r.last_sync == null OR LEFT(r.last_sync, 10) < LEFT(@cutoff, 10)
+               RETURN r.project_id)
 FOR a IN drift_alerts FILTER a.status == "open"
   FILTER @proj == "" OR a.project_id == @proj
-  FILTER a.detected_at < @cutoff
+  FILTER LEFT(a.detected_at, 10) < LEFT(@cutoff, 10)
   FILTER a.closed_evidence == null OR a.closed_evidence == ""
+  FILTER a.project_id IN dormant
   RETURN a._key
+"""
+
+# The alerts the first version WOULD have swept: old rows in a project that has synced
+# recently. These are the revival cases, and they are live work, not noise. Reported
+# separately so the distinction is visible rather than silently applied.
+REVIVED_AQL = """
+LET active = (FOR r IN project_registry
+              FILTER r.last_sync != null AND LEFT(r.last_sync, 10) >= LEFT(@cutoff, 10)
+              RETURN r.project_id)
+FOR a IN drift_alerts FILTER a.status == "open"
+  FILTER @proj == "" OR a.project_id == @proj
+  FILTER LEFT(a.detected_at, 10) < LEFT(@cutoff, 10)
+  FILTER a.project_id IN active
+  COLLECT project = a.project_id WITH COUNT INTO n
+  SORT n DESC RETURN { project, n }
 """
 
 AGE_OUT_AQL = """
@@ -224,6 +259,7 @@ def main() -> int:
     contradicted = list(db.aql.execute(CONTRADICTED_AQL, bind_vars={"proj": ONLY_PROJECT}))
     orphaned = list(db.aql.execute(ORPHANED_AQL, bind_vars={"proj": ONLY_PROJECT}))
     ancient = list(db.aql.execute(ANCIENT_AQL, bind_vars=binds))
+    revived = list(db.aql.execute(REVIVED_AQL, bind_vars=binds))
 
     print("\n  mechanically resolvable (no judgement required)")
     print(f"    contradicted : {len(contradicted):>4}  open alert whose project+req_id "
@@ -236,8 +272,19 @@ def main() -> int:
           "project is not in project_registry")
     for o in orphaned[:8]:
         print(f"                   - {o['project']}: {o['n']}")
-    print(f"    ancient      : {len(ancient):>4}  open >{STALE_DAYS}d with no closing "
-          "evidence")
+    print(f"    ancient      : {len(ancient):>4}  open >{STALE_DAYS}d, no closing "
+          f"evidence, AND project not synced in {STALE_DAYS}d")
+
+    if revived:
+        print(f"\n  NOT ancient — old alerts in a project that is still being synced "
+              f"({sum(r['n'] for r in revived)} row(s))")
+        print("    These are live tracked work. Alert age alone would sweep them; a "
+              "project can go\n    quiet and come back, and the one that did is the most "
+              "active in the fleet.")
+        for r in revived[:8]:
+            print(f"      - {r['project']}: {r['n']}")
+        if len(revived) > 8:
+            print(f"        … {len(revived) - 8} more project(s)")
 
     if not AGE_OUT:
         print("\n  Nothing was written. To cap the alert queue on purpose, re-run with "

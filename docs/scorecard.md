@@ -401,11 +401,35 @@ staleness signals that need no judgement. The first run reframes the problem ent
 **the backlog is not un-worked, it is dormant.** Projects people are actively in carry
 *zero* stale alerts — `project-sentinel` 13 open / 0 stale, `arango-schema-analyzer`
 11/0, `arango-sparql-py` 11/0, `contextual-data-fabric` 8/0. The backlog is whole
-projects that stopped: `arangodb-data-tools-rs` 36 open and all 36 older than 60 days,
-`dnb-er` 14/14, `jlr-contextual-memory-fabric` 10/10,
-`network-asset-management-demo` 10/10, `domyn-gdelt` 9/9. Of 200 open alerts, **106
-predate August 22**; only **2** are contradicted (a closed row exists for the same
+projects that stopped — meaning the project itself has not run `/prd-sync` since before
+the threshold, not merely that its alerts are old (see the correction below, which is the
+whole point): `dnb-er` 14, `jlr-contextual-memory-fabric` 10,
+`network-asset-management-demo` 10, `domyn-gdelt` 9, `fraud-intelligence` 6, and four
+more with 1–2 each — **53 rows across 8 projects**. Of 200 open alerts, 106 predate
+August 22, but only these 53 belong to a project that has also gone quiet. Separately,
+only **2** alerts are contradicted (a closed row exists for the same
 `project_id`+`req_id`) and **0** are orphaned, so the data itself is coherent.
+
+> **Correction (2026-10-21, same day).** The first version of this paragraph named
+> `arangodb-data-tools-rs` (36 open, 36 stale) as the lead example of a stopped project.
+> That was wrong, and the way it was wrong matters more than the error. The project went
+> 27 commits in June, 11 in July, 5 in August, then **39 days of total silence**, then 18
+> commits in October, a `v0.1.0` tag on the 19th, and a `/prd-sync` on the 21st. 35 of its
+> 36 open alerts were detected *during the quiet stretch*, so an alert-age test marked
+> every one of them ancient — while they are in fact live tracked work against 130
+> requirements in the most active project in the fleet. A sample taken in September would
+> have looked terminal and been wrong.
+>
+> `triage.py`'s `ancient` test now requires the **project** to be dormant as well as the
+> alert to be old, read from `project_registry.last_sync`. That took the proposed sweep
+> from **97 rows to 53** and protected 45 across four still-syncing projects
+> (`arangodb-data-tools-rs` 35, `arango-ontoextract` 6, `agentic-graph-analytics` 2,
+> `argos` 2), which are now reported under "NOT ancient" instead of being silently
+> included. `tests/test_triage.py` guards it.
+>
+> The general lesson, which applies well beyond this script: **dormancy is a property of
+> the project, not of the timestamp on a row.** A metric that samples one moment cannot
+> tell a dead project from a quiet one, and this system is full of such metrics.
 
 `--age-out` moves ancient alerts to `status: "stale"` — deliberately *not* `closed`,
 because closing asserts the gap was fixed and nobody has verified that, while stale
