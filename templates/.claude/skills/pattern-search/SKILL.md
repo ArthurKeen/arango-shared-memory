@@ -69,9 +69,42 @@ and the author gets credit). Skipping it is the #1 reason the surfaced→applied
 ```
 Use tool: pattern-applied
 keys: ["<applied pattern _key>", "..."]
+outcome: "worked"
 ```
 Pass only the `_key`(s) you genuinely used — not every result shown. Do this as soon as you've
 applied the pattern (don't defer it to session end, where it's easily forgotten). One call, no AQL.
+
+#### Recording a FAILED application — the half that has never been used
+
+`outcome` is **not optional in practice**. It accepts `worked` or `failed`, and an
+unrecognised value is now rejected rather than silently counted as a success.
+
+A pattern application **FAILED** if, after you adapted it:
+- the checks it was meant to make pass are still failing, **or**
+- you reverted it and solved the problem a different way, **or**
+- it introduced a defect you then had to fix.
+
+```
+Use tool: pattern-applied
+keys: ["<pattern that did not help>"]
+outcome: "failed"
+```
+
+This is a **useful signal, not a confession.** A failed apply bumps `applied_failed`
+*without* boosting `usage_count` or `last_used`, which is the only mechanism by which a
+pattern's ranking can ever fall. A pattern that keeps getting tried and keeps not working
+is exactly what the ranking needs to learn, and the author needs to know.
+
+> **Do not reach for `dismiss_surfaced.py` instead.** Dismissal means *reviewed and never
+> tried* — a different, weaker statement. Using it for something you actually tried and
+> abandoned is the easy path, and it is why `applied_failed` sat at **0 across 119
+> patterns and 113 applies** (measured 2026-09-28): the honest verdict had no door, so it
+> went out through the dismissal one and vanished.
+
+**The verdict can come later.** Record the apply when you apply it (attribution), and if
+the work does not survive the session — reverted, replaced, or still failing — come back
+and record `outcome: "failed"` for that key before the session ends. A second call appends
+a second entry to the pattern's `apply_log`, so the trail stays honest.
 
 **If you applied 2+ patterns together**, also record the co-application so relatedness learns from
 real usage (maintenance folds `co_applied` into the edge `weight` that drives graph expansion).

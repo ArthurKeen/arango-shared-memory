@@ -84,10 +84,15 @@ if pending != "0":
     # the state file, so a message that only says that leaves the gate unsatisfiable.
     spaced = keys.replace(",", " ") if keys not in ("", "-") else ""
     parts.append(f"[SHARED-MEMORY APPLY GATE] {pending} surfaced pattern(s) unresolved. "
-                 "For any result that informed the solution, call pattern-applied with only "
-                 "those key(s). For the rest — reviewed and deliberately not reused — record "
-                 f"that decision: python3 .claude/hooks/dismiss_surfaced.py {sid} {spaced} "
-                 "Never mark every result as applied.")
+                 "THREE outcomes, not two. (1) It informed the solution: pattern-applied "
+                 "with only those key(s), outcome='worked'. (2) You TRIED it and it did not "
+                 "help — the checks it should have made pass are still failing, you reverted "
+                 "it for another approach, or it introduced a defect: pattern-applied with "
+                 "outcome='failed'. That is a useful signal, not a confession, and it is the "
+                 "only way a pattern's ranking can ever fall. (3) Reviewed and never tried: "
+                 f"python3 .claude/hooks/dismiss_surfaced.py {sid} {spaced} "
+                 "Do not use (3) for something you actually tried — that discards the "
+                 "evidence. Never mark every result as applied.")
 print(json.dumps({
     "decision": "block",
     "reason": " ".join(parts),

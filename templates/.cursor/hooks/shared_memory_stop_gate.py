@@ -85,11 +85,16 @@ def followup(payload: dict[str, Any]) -> str:
         # state under .cursor/ on its own.
         parts.append(
             f"[SHARED-MEMORY APPLY GATE] {len(pending)} surfaced pattern(s) unresolved. "
-            "For any result that informed the solution, call pattern-applied with only "
-            "those key(s). For the rest — reviewed and deliberately not reused — record "
-            "that decision: python3 .claude/hooks/dismiss_surfaced.py "
+            "THREE outcomes, not two. (1) It informed the solution: pattern-applied with "
+            "only those key(s), outcome='worked'. (2) You TRIED it and it did not help — "
+            "the checks it should have made pass are still failing, you reverted it for "
+            "another approach, or it introduced a defect: pattern-applied with "
+            "outcome='failed'. That is a useful signal, not a confession, and it is the "
+            "only way a pattern's ranking can ever fall. (3) Reviewed and never tried: "
+            "python3 .claude/hooks/dismiss_surfaced.py "
             f"{_event_id(payload)} {' '.join(pending)} "
-            "Never mark every search result as applied."
+            "Do not use (3) for something you actually tried — that discards the "
+            "evidence. Never mark every search result as applied."
         )
     return " ".join(parts)
 
