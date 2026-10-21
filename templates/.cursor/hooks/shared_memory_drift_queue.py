@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -16,7 +17,8 @@ def main() -> int:
         file_path = ""
 
     if file_path:
-        try:
+        # Best-effort: a hook must never fail the tool call it observes.
+        with contextlib.suppress(Exception):
             subprocess.run(
                 [sys.executable, ".claude/hooks/drift_queue.py"],
                 input=json.dumps({"tool_input": {"file_path": file_path}}),
@@ -25,8 +27,6 @@ def main() -> int:
                 timeout=5,
                 check=False,
             )
-        except Exception:  # noqa: BLE001
-            pass
 
     # afterFileEdit has no supported output fields; still emit valid JSON.
     print("{}")
