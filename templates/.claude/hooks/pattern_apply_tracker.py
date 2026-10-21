@@ -101,8 +101,9 @@ def main() -> int:
         if surfaced:
             print(
                 "[SHARED-MEMORY APPLY GATE] If any surfaced result is actually reused, "
-                "call pattern-applied immediately with only the reused key(s): "
-                + ", ".join(surfaced)
+                "call pattern-applied immediately with only the reused key(s) and an "
+                "explicit outcome ('worked', or 'failed' if you tried it and it did not "
+                "help): " + ", ".join(surfaced)
             )
     except Exception:  # noqa: BLE001
         pass

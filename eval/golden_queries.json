@@ -1,179 +1,537 @@
 {
-  "_comment": "Golden retrieval-eval set: query -> acceptable expected pattern _keys (any-of). Categories: paraphrase (semantic recall, low lexical overlap), keyword (error-code/term lookup, BM25), concept (vague cross-project). Synced into the eval_queries collection and scored by scripts/eval_retrieval.py. Keep queries phrased the way a developer would actually type them mid-problem; never paste a pattern's problem_description verbatim.",
+  "_comment": "Golden retrieval-eval set: query -> acceptable expected pattern _keys (any-of). TWO TIERS. Tier 1 (paraphrase / keyword / concept, 29 queries, built 2026-07 against a 68-pattern corpus) is now SATURATED: every mode scores ~0.98 and bm25, hybrid and hybrid+graph are indistinguishable on it. Keep it as a regression floor -- a drop here is a real regression -- but do not quote it as evidence of retrieval quality. Tier 2 (hard-paraphrase / lexical-trap / hard-concept, added 2026-10-20 against a 141-pattern corpus) is built to DISCRIMINATE. Each hard-paraphrase query states the symptom in the words a developer would use while stuck and deliberately withholds the pattern's distinctive technical vocabulary, so lexical overlap with the target is near zero and BM25 has little to grip. lexical-trap queries sit on top of near-duplicate clusters in the corpus (five BYOC deploy patterns, the git-in-tests pair) where surface similarity is high and the right answer is a specific member or set. hard-concept queries are vague and cross-project, with answers spread over several repos that share no vocabulary. Read the MODE SPREAD, not the absolute score: if hybrid does not beat bm25 on tier 2, the vector layer is not earning its cost, and if hybrid+graph does not beat hybrid, the graph layer is not earning its cost. That is the question this harness exists to answer and tier 1 can no longer ask it. Synced into the eval_queries collection and scored by scripts/eval_retrieval.py. Keep queries phrased the way a developer would actually type them mid-problem; never paste a pattern's own title or description in as the query.",
   "queries": [
     {
       "_key": "eq_hook_silent",
       "category": "paraphrase",
       "query": "Claude Code hook is configured but silently does nothing when I edit a file - no queue marker ever appears",
-      "expected": ["arango-shared-memory_other_20260705_a"]
+      "expected": [
+        "arango-shared-memory_other_20260705_a"
+      ]
     },
     {
       "_key": "eq_readback_after_update",
       "category": "paraphrase",
       "query": "AQL query that updates a collection and then reads it back in the same query fails",
-      "expected": ["iam_data-model_20260709_152231"]
+      "expected": [
+        "iam_data-model_20260709_152231"
+      ]
     },
     {
       "_key": "eq_insert_needs_embedding",
       "category": "paraphrase",
       "query": "inserting documents fails once the collection has a vector index because the docs lack the embedding field",
-      "expected": ["arango-shared-memory_data-model_20260708_032708", "arango-shared-memory_testing_20260709_000008"]
+      "expected": [
+        "arango-shared-memory_data-model_20260708_032708",
+        "arango-shared-memory_testing_20260709_000008"
+      ]
     },
     {
       "_key": "eq_docker_flag_preserve",
       "category": "paraphrase",
       "query": "enable an experimental arangod startup flag on an existing Docker container without losing the data volume",
-      "expected": ["arango-shared-memory_deployment_20260705_c"]
+      "expected": [
+        "arango-shared-memory_deployment_20260705_c"
+      ]
     },
     {
       "_key": "eq_edge_mistyped_copy",
       "category": "paraphrase",
       "query": "after copying a database the edge collections came out as document collections and graph creation fails",
-      "expected": ["arango-shared-memory_data-model_20260720_222954"]
+      "expected": [
+        "arango-shared-memory_data-model_20260720_222954"
+      ]
     },
     {
       "_key": "eq_ttl_migration_loss",
       "category": "paraphrase",
       "query": "closed documents vanished right after recreating a TTL index during a data migration",
-      "expected": ["arango-shared-memory_data-model_20260720_223015"]
+      "expected": [
+        "arango-shared-memory_data-model_20260720_223015"
+      ]
     },
     {
       "_key": "eq_cors_methods",
       "category": "paraphrase",
       "query": "browser reports blocked by CORS policy after tightening allow_methods in the FastAPI middleware",
-      "expected": ["multi-tenant-time-travel-architecture_api-design_20260709_162559"]
+      "expected": [
+        "multi-tenant-time-travel-architecture_api-design_20260709_162559"
+      ]
     },
     {
       "_key": "eq_remote_vector_timeout",
       "category": "paraphrase",
       "query": "vector index creation on a shared remote cluster hits a 60 second client timeout and afterwards queries complain the index is not trained",
-      "expected": ["arango-shared-memory_deployment_20260717_003211"]
+      "expected": [
+        "arango-shared-memory_deployment_20260717_003211"
+      ]
     },
     {
       "_key": "eq_err1579",
       "category": "keyword",
       "query": "ERR 1579 access after data-modification",
-      "expected": ["iam_data-model_20260709_152231"]
+      "expected": [
+        "iam_data-model_20260709_152231"
+      ]
     },
     {
       "_key": "eq_err1555",
       "category": "keyword",
       "query": "ERR 1555 vector index not yet trained",
-      "expected": ["arango-shared-memory_deployment_20260717_003211"]
+      "expected": [
+        "arango-shared-memory_deployment_20260717_003211"
+      ]
     },
     {
       "_key": "eq_expecting_array",
       "category": "keyword",
       "query": "insert fails Expecting type Array vector index",
-      "expected": ["arango-shared-memory_data-model_20260708_032708", "arango-shared-memory_testing_20260709_000008"]
+      "expected": [
+        "arango-shared-memory_data-model_20260708_032708",
+        "arango-shared-memory_testing_20260709_000008"
+      ]
     },
     {
       "_key": "eq_ssl_cert_file",
       "category": "keyword",
       "query": "SSL_CERT_FILE No such file or directory httpx OpenAI request fails",
-      "expected": ["arango-solutions-mcp-server_deployment_20260716_012710"]
+      "expected": [
+        "arango-solutions-mcp-server_deployment_20260716_012710"
+      ]
     },
     {
       "_key": "eq_with_clause_cluster",
       "category": "keyword",
       "query": "AQL graph traversal on cluster fails asking for WITH clause, works on single server",
-      "expected": ["jlr-contextual-memory-fabric_data-model_20260705_161750", "iam_other_20260709_234307"]
+      "expected": [
+        "jlr-contextual-memory-fabric_data-model_20260705_161750",
+        "iam_other_20260709_234307"
+      ]
     },
     {
       "_key": "eq_upsert_noop",
       "category": "keyword",
       "query": "upsert-document MCP tool wrong parameters silent no-op nothing written",
-      "expected": ["arango-shared-memory_data-model_20260705_b"]
+      "expected": [
+        "arango-shared-memory_data-model_20260705_b"
+      ]
     },
     {
       "_key": "eq_rag_grounding",
       "category": "concept",
       "query": "keep LLM answers strictly limited to the retrieved authorized context so it cannot make things up",
-      "expected": ["jlr-contextual-memory-fabric_other_20260705_161750"]
+      "expected": [
+        "jlr-contextual-memory-fabric_other_20260705_161750"
+      ]
     },
     {
       "_key": "eq_pagerank_noise",
       "category": "concept",
       "query": "graph centrality results dominated by dense uninteresting background nodes in a demo dataset",
-      "expected": ["project-sentinel_performance_20260723_144200", "fraud-intelligence_data-model_20260716_155407"]
+      "expected": [
+        "project-sentinel_performance_20260723_144200",
+        "fraud-intelligence_data-model_20260716_155407"
+      ]
     },
     {
       "_key": "eq_er_review_flood",
       "category": "concept",
       "query": "entity resolution generates too many junk match candidates for reviewers to wade through",
-      "expected": ["project-sentinel_data-model_20260722_184321"]
+      "expected": [
+        "project-sentinel_data-model_20260722_184321"
+      ]
     },
     {
       "_key": "eq_offline_report",
       "category": "concept",
       "query": "produce a shareable report with charts that must work without internet or LLM calls during a customer demo",
-      "expected": ["project-sentinel_other_20260723_144209", "project-sentinel_api-design_20260729_142641"]
+      "expected": [
+        "project-sentinel_other_20260723_144209",
+        "project-sentinel_api-design_20260729_142641"
+      ]
     },
     {
       "_key": "eq_bitemporal_retrofit",
       "category": "concept",
       "query": "add as-of time travel to a graph whose edges only carry a last-update timestamp",
-      "expected": ["iam_data-model_20260709_152243"]
+      "expected": [
+        "iam_data-model_20260709_152243"
+      ]
     },
     {
       "_key": "eq_spurious_classes",
       "category": "concept",
       "query": "schema discovery invents hundreds of bogus classes for a plain property graph",
-      "expected": ["iam_data-model_20260716_012746"]
+      "expected": [
+        "iam_data-model_20260716_012746"
+      ]
     },
     {
       "_key": "eq_risk_propagation_demo",
       "category": "concept",
       "query": "show that entity resolution actually changes the downstream risk and UBO conclusions, not just that it dedupes records",
-      "expected": ["project-sentinel_data-model_20260722_221544", "project-sentinel_data-model_20260722_184321"]
+      "expected": [
+        "project-sentinel_data-model_20260722_221544",
+        "project-sentinel_data-model_20260722_184321"
+      ]
     },
     {
       "_key": "eq_owl_shacl_modeling",
       "category": "concept",
       "query": "model AWS services as OWL classes with SHACL restriction shapes and align the ontology with PROV-O and SKOS",
-      "expected": ["aws-ontology_data-model_20260722_231755"]
+      "expected": [
+        "aws-ontology_data-model_20260722_231755"
+      ]
     },
     {
       "_key": "eq_shacl_severity",
       "category": "paraphrase",
       "query": "use SHACL Violation vs Warning severities to surface known data-completeness gaps without failing CI",
-      "expected": ["aws-ontology_data-model_20260722_231755"]
+      "expected": [
+        "aws-ontology_data-model_20260722_231755"
+      ]
     },
     {
       "_key": "eq_arn_backfill",
       "category": "concept",
       "query": "backfill a required identifier like an ARN across many existing ontology individuals without inventing values",
-      "expected": ["aws-ontology_data-model_20260729_215137"]
+      "expected": [
+        "aws-ontology_data-model_20260729_215137"
+      ]
     },
     {
       "_key": "eq_graph_investigation_ui",
       "category": "concept",
       "query": "build a graph investigation UI with a Cytoscape canvas, risk-lens repaint and a provenance drill-down, offline and without a bundler",
-      "expected": ["project-sentinel_api-design_20260729_142641"]
+      "expected": [
+        "project-sentinel_api-design_20260729_142641"
+      ]
     },
     {
       "_key": "eq_async_mcp_offload",
       "category": "paraphrase",
       "query": "make blocking python-arango calls in async MCP tools run off the event loop and return a standard error envelope",
-      "expected": ["arango-solutions-mcp-server_other_20260730_140225"]
+      "expected": [
+        "arango-solutions-mcp-server_other_20260730_140225"
+      ]
     },
     {
       "_key": "eq_cytoscape_overlay",
       "category": "paraphrase",
       "query": "overlay extra derived lineage edges on a Cytoscape canvas and highlight or dim a path without triggering a relayout",
-      "expected": ["project-sentinel_other_20260729_173241"]
+      "expected": [
+        "project-sentinel_other_20260729_173241"
+      ]
     },
     {
       "_key": "eq_synthetic_graph_data",
       "category": "concept",
       "query": "generate deterministic synthetic ArangoDB graph data for a demo, swapping real ARNs and account ids for fake ones",
-      "expected": ["iam_data-model_20260722_022906"]
+      "expected": [
+        "iam_data-model_20260722_022906"
+      ]
     },
     {
       "_key": "eq_lossy_schema_export",
       "category": "paraphrase",
       "query": "schema export renames data values into lossy labels, need aliases and a type discriminator with top-k sampling for transparency",
-      "expected": ["arango-schema-mapper_data-model_20260716_171339"]
+      "expected": [
+        "arango-schema-mapper_data-model_20260716_171339"
+      ]
+    },
+    {
+      "_key": "eq_h_ttl_never_expires",
+      "category": "hard-paraphrase",
+      "query": "old records are never cleaned up even though expiry is switched on and every setting looks correct",
+      "expected": [
+        "arango-worldview_data-model_20260825_185119"
+      ]
+    },
+    {
+      "_key": "eq_h_tamper_false_positive",
+      "category": "hard-paraphrase",
+      "query": "our integrity check insists the history was altered but nobody has touched it and it never recovers",
+      "expected": [
+        "argos_data-model_20261016_170246"
+      ]
+    },
+    {
+      "_key": "eq_h_area_inverted",
+      "category": "hard-paraphrase",
+      "query": "a location filter returns things from everywhere except the region I drew, and the map looks right",
+      "expected": [
+        "arango-worldview_data-model_20260826_150649"
+      ]
+    },
+    {
+      "_key": "eq_h_stale_after_save",
+      "category": "hard-paraphrase",
+      "query": "people keep seeing the old version after saving an edit and refreshing does not help",
+      "expected": [
+        "arango-ontoextract_caching_20261021_005108"
+      ]
+    },
+    {
+      "_key": "eq_h_panel_flicker",
+      "category": "hard-paraphrase",
+      "query": "a panel flashes empty and its request never settles because something changes on every render",
+      "expected": [
+        "arango-worldview_performance_20260903_225517"
+      ]
+    },
+    {
+      "_key": "eq_h_list_duplicates",
+      "category": "hard-paraphrase",
+      "query": "switching tabs quickly makes entries show up twice in the same list",
+      "expected": [
+        "project-sentinel_state-management_20260730_035301"
+      ]
+    },
+    {
+      "_key": "eq_h_drag_opens_detail",
+      "category": "hard-paraphrase",
+      "query": "moving an item with the mouse also opens its detail pane the moment I let go",
+      "expected": [
+        "arango-ontoextract_other_20260924_052433"
+      ]
+    },
+    {
+      "_key": "eq_h_ready_but_dead",
+      "category": "hard-paraphrase",
+      "query": "the startup check reports everything is ready but nothing is actually answering",
+      "expected": [
+        "arango-worldview_testing_20260826_140434"
+      ]
+    },
+    {
+      "_key": "eq_h_collector_goes_quiet",
+      "category": "hard-paraphrase",
+      "query": "a background collector just stops producing anything, with nothing at all in the logs",
+      "expected": [
+        "arango-worldview_other_20260825_152901",
+        "arango-worldview_other_20260903_043259"
+      ]
+    },
+    {
+      "_key": "eq_h_identical_grades",
+      "category": "hard-paraphrase",
+      "query": "our automatic scorer gives almost every item the exact same grade",
+      "expected": [
+        "arango-ontoextract_testing_20261013_152115"
+      ]
+    },
+    {
+      "_key": "eq_h_shortfall_overcounted",
+      "category": "hard-paraphrase",
+      "query": "our shortfall figure looks far too large because the same unfilled orders are counted again every period",
+      "expected": [
+        "brambles-pallet-network_other_20260804_201504"
+      ]
+    },
+    {
+      "_key": "eq_h_diagram_unreadable",
+      "category": "hard-paraphrase",
+      "query": "the relationship picture becomes an unreadable strip once there are a few hundred things on it",
+      "expected": [
+        "arango-ontoextract_other_20260924_052416"
+      ]
+    },
+    {
+      "_key": "eq_h_works_locally_fails_hosted",
+      "category": "hard-paraphrase",
+      "query": "a text match works against my local database and blows up on the hosted one",
+      "expected": [
+        "ic-knowledge-graph_data-model_20260716_012728"
+      ]
+    },
+    {
+      "_key": "eq_h_filter_quietly_empty",
+      "category": "hard-paraphrase",
+      "query": "a tag filter over a multi-hop walk looks right and quietly returns nothing at all",
+      "expected": [
+        "r2g_data-model_20260902_150608",
+        "r2g_data-model_20260902_182552"
+      ]
+    },
+    {
+      "_key": "eq_h_import_reports_success",
+      "category": "hard-paraphrase",
+      "query": "the bulk load says it worked but rows are missing afterwards",
+      "expected": [
+        "r2g_deployment_20261017_012427"
+      ]
+    },
+    {
+      "_key": "eq_h_env_at_import",
+      "category": "hard-paraphrase",
+      "query": "the app quits before it serves anything when there is no settings file on disk",
+      "expected": [
+        "domyn_deployment_20260826_203320"
+      ]
+    },
+    {
+      "_key": "eq_h_assets_404_behind_gateway",
+      "category": "hard-paraphrase",
+      "query": "served under a path prefix the app cannot find its own files, and the obvious fix breaks without a trailing slash",
+      "expected": [
+        "domyn_api-design_20260826_203257",
+        "project-sentinel_api-design_20260925_195009"
+      ]
+    },
+    {
+      "_key": "eq_h_lazy_view_object_event",
+      "category": "hard-paraphrase",
+      "query": "opening a screen for the first time throws an error that names nothing useful, only behind the gateway",
+      "expected": [
+        "arango-ontoextract_other_20260923_203029"
+      ]
+    },
+    {
+      "_key": "eq_h_last_bucket_empty",
+      "category": "hard-paraphrase",
+      "query": "one whole group of results never shows up because the earlier groups used the entire allowance",
+      "expected": [
+        "arango-worldview_api-design_20260825_152915"
+      ]
+    },
+    {
+      "_key": "eq_h_terminal_glob_abort",
+      "category": "lexical-trap",
+      "query": "my recursive search over the source tree dies before the tool even runs, but the same line is fine for a colleague",
+      "expected": [
+        "arango-entity-resolution_other_20260815_201824"
+      ]
+    },
+    {
+      "_key": "eq_h_missing_on_mac",
+      "category": "lexical-trap",
+      "query": "a one-liner that caps how long a command may run is fine on the build server and missing on my laptop",
+      "expected": [
+        "contextual-data-fabric_other_20260822_200453"
+      ]
+    },
+    {
+      "_key": "eq_h_tests_rewrote_remotes",
+      "category": "lexical-trap",
+      "query": "running the test suite silently changed where my repository pushes to",
+      "expected": [
+        "arango-ontoextract_testing_20261013_175536",
+        "arango-ontoextract_testing_20261014_191116"
+      ]
+    },
+    {
+      "_key": "eq_h_push_went_two_places",
+      "category": "lexical-trap",
+      "query": "one push published to two repositories when I only meant one of them",
+      "expected": [
+        "network-asset-management-demo_deployment_20260801_203652"
+      ]
+    },
+    {
+      "_key": "eq_h_byoc_which_recipe",
+      "category": "lexical-trap",
+      "query": "deploying a python web app with static files as an ArangoDB platform container service, where the docs leave out the runtime contract",
+      "expected": [
+        "domyn_deployment_20260826_173356",
+        "domyn_deployment_20260826_181600",
+        "domyn_deployment_20260826_193323",
+        "project-sentinel_deployment_20260925_195006",
+        "arango-ontoextract_deployment_20260923_170651"
+      ]
+    },
+    {
+      "_key": "eq_h_byoc_update_not_replace",
+      "category": "lexical-trap",
+      "query": "redeploying an already running platform service and being unable to prove the new build is what is live",
+      "expected": [
+        "arango-ontoextract_deployment_20260924_184722"
+      ]
+    },
+    {
+      "_key": "eq_h_green_tests_bad_recall",
+      "category": "hard-concept",
+      "query": "every test passes and the feature still barely works for real users",
+      "expected": [
+        "arango-entity-resolution_testing_20260803_043116",
+        "arango-ontoextract_testing_20260925_225024",
+        "brambles-pallet-network_testing_20260810_200912"
+      ]
+    },
+    {
+      "_key": "eq_h_built_never_wired",
+      "category": "hard-concept",
+      "query": "things that were built but nothing ever calls or enforces them",
+      "expected": [
+        "arango-entity-resolution_testing_20260801_181337",
+        "arango-shared-memory_testing_20260804_232422",
+        "auto-tool-research_other_20260818_142110"
+      ]
+    },
+    {
+      "_key": "eq_h_docs_drift_from_code",
+      "category": "hard-concept",
+      "query": "our written docs and published numbers stop matching the code and nothing notices",
+      "expected": [
+        "arango-entity-resolution_testing_20260930_041229",
+        "arango-entity-resolution_testing_20260922_170031"
+      ]
+    },
+    {
+      "_key": "eq_h_numbers_not_reproducible",
+      "category": "hard-concept",
+      "query": "the same benchmark gives different figures each run so the published table cannot be reproduced",
+      "expected": [
+        "arango-entity-resolution_testing_20260930_041224"
+      ]
+    },
+    {
+      "_key": "eq_h_threshold_hardcoded",
+      "category": "hard-concept",
+      "query": "a fixed cutoff baked into the code throws away most of the quality on some datasets",
+      "expected": [
+        "arango-entity-resolution_data-model_20260803_152008"
+      ]
+    },
+    {
+      "_key": "eq_h_gate_unsatisfiable",
+      "category": "hard-concept",
+      "query": "an enforcement gate demands something its own instructions forbid, so it never stops firing",
+      "expected": [
+        "auto-tool-research_other_20260814_190651",
+        "ic-knowledge-graph_other_20261008_160503"
+      ]
+    },
+    {
+      "_key": "eq_h_ranking_best_match_buried",
+      "category": "hard-concept",
+      "query": "the obviously correct document is top of both of the individual lists and still finishes far down after they are merged",
+      "expected": [
+        "arango-shared-memory_other_20260801_050550"
+      ]
+    },
+    {
+      "_key": "eq_h_miner_all_false_positives",
+      "category": "hard-concept",
+      "query": "an automated capture step produced candidates that were every one of them wrong",
+      "expected": [
+        "auto-tool-research_other_20260822_200050"
+      ]
+    },
+    {
+      "_key": "eq_h_ci_red_for_weeks",
+      "category": "hard-concept",
+      "query": "a check nobody reads has been failing for weeks while everyone believes the gates run",
+      "expected": [
+        "arango-entity-resolution_deployment_20260930_041217"
+      ]
+    },
+    {
+      "_key": "eq_h_seed_destroys_shared",
+      "category": "hard-concept",
+      "query": "the documented local setup step quietly wipes something other developers are sharing",
+      "expected": [
+        "contextual-data-fabric_deployment_20260921_234757"
+      ]
     }
   ]
 }

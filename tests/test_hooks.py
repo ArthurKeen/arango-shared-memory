@@ -195,6 +195,24 @@ class TestStopGate(TmpProject):
         out = json.loads(self.run_gate({"session_id": "session-1"}).stdout)
         self.assertIn("dismiss_surfaced.py session-1 p2", out["reason"])
 
+    def test_block_message_offers_the_failed_outcome(self):
+        """The gate used to offer two doors and neither could mean "it didn't help".
+
+        Applied counted as a success; dismissed meant reviewed-and-never-tried. A
+        pattern that WAS tried and did not work had no door, so the honest verdict went
+        out through the dismissal one and vanished. Measured 2026-09-28: 113 applies,
+        0 failures, and not one of 119 patterns had ever recorded a failure — which
+        made success_rate a constant and the ranking multiplier built on it inert.
+        """
+        self._state(surfaced_keys=["p1", "p2"], applied_keys=["p1"])
+        reason = json.loads(self.run_gate({"session_id": "session-1"}).stdout)["reason"]
+        self.assertIn("outcome='failed'", reason)
+        # all three doors must be distinguishable, or the agent picks the easy one
+        self.assertIn("outcome='worked'", reason)
+        self.assertIn("dismiss_surfaced.py session-1 p2", reason)
+        # and it must say which door NOT to use for a tried-and-abandoned pattern
+        self.assertIn("Do not use (3) for something you actually tried", reason)
+
     def test_a_shell_edit_is_reconciled_and_the_gate_still_emits_json(self):
         """A shell edit is invisible to the edit hook, so the reconciler has to queue it.
 
@@ -470,9 +488,13 @@ class TestCursorApplyGate(unittest.TestCase):
         self.tracker.update_state(payload)
         message = self.stop.followup(payload)
         self.assertIn("1 surfaced pattern(s) unresolved", message)
-        self.assertIn("call pattern-applied with only", message)
+        self.assertIn("pattern-applied with only those key(s)", message)
         # Must name a runnable command, not just describe the desired state.
         self.assertIn("dismiss_surfaced.py conv-2 only-surfaced", message)
+        # Cursor parity on the third door (see the Claude gate test for why).
+        self.assertIn("outcome='failed'", message)
+        self.assertIn("outcome='worked'", message)
+        self.assertIn("Do not use (3) for something you actually tried", message)
 
     def test_dismissed_keys_resolve_the_cursor_gate(self):
         # Cursor keeps its session state under .cursor/, so it needs the same

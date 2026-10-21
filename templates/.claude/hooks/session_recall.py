@@ -240,7 +240,9 @@ def main() -> int:
 
     lines.append("  Protocol: /pattern-search before solving (filter memory_type=feedback for "
                  "guidance or pattern for solutions) -> pattern-applied immediately for any "
-                 "result actually reused -> /pattern-save after -> /prd-sync before ending a "
+                 "result actually reused, with outcome='worked' or outcome='failed' (a "
+                 "pattern you tried that did not help is a real signal — record it) -> "
+                 "/pattern-save after -> /prd-sync before ending a "
                  "session that touched implementation files.")
     print("\n".join(lines))
     return 0
