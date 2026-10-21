@@ -48,7 +48,7 @@ inside the visualizer's node-data path.
 - The frontend's own hydration query (see §4), replicated verbatim over `_api/cursor`
   with the same credentials, returns fully-populated nodes
   (5 edge ids → 5 edges + 6 full nodes).
-- Permissions: every relevant user (`arthur`, `pj`, `engineering`, `burleson`, `root`)
+- Permissions: every relevant user (`arthur`, `user-2`, `engineering`, `user-5`, `root`)
   has `rw` on both database `memory` and collection `drift_alerts`.
 - The visualizer's *Settings → Label / Hover* dialog lists the collection's full
   attribute set with types (including fields present on as few as 3–8 docs), so the

@@ -1,6 +1,17 @@
 # System Scorecard — arango-shared-memory
 
-_Last updated: 2026-08-28 (round 6: **the prediction held** — with the gate fixed and the
+_Last updated: 2026-10-21 (round 8: **round 7's five actions, carried out** — eval
+rebuilt and discriminating, two measurement fixes written but not yet deployed, the
+backlog diagnosed as dormancy, and the adoption question answered from the search log
+rather than asked. Earlier headers preserved below.)_
+
+_Round 7 header (2026-09-28): (round 7: **the premise finally has evidence — four humans now
+read this memory**, ending the single-operator caveat that headlined every round since 3.
+An external contributor found three real defects this project's own guards missed. Two
+long-standing weaknesses are unchanged and one new self-inflicted gap opened: see
+"Round 7". Earlier headers preserved below.)_
+
+_Round 6 header (2026-08-28): (round 6: **the prediction held** — with the gate fixed and the
 Phase-4 skill delivered, applies flattened (+5 vs +21 new patterns), conversion fell
 44% → 40%, and applies-per-search converged 1.21 → 1.14 → 1.01. That decline is the
 inflation leaving, not a regression — it was written down in advance for exactly this
@@ -18,7 +29,47 @@ hid the defect. No post-fix telemetry exists yet). Method: static review of `tem
 `verify.py` (all-green, incl. MCP liveness) and direct read-only AQL against the shared prod
 cluster (`prod.demo.pilot.arango.ai`, db `memory`)._
 
-## Overall: **A− / healthy and better-engineered; the value metric is now known to have been inflated**
+> **A note on identities.** This repository is public. Teammates other than the owner are
+> referred to only as `user-2`, `user-3`, `user-4`, `user-5` throughout — consistently, so
+> per-person figures stay comparable across rounds. The real `search_log.by` / `saved_by`
+> values live in the database, where access is already controlled; they do not belong in a
+> published document. Keep it that way when writing the next round: adoption claims need
+> *counts per distinct person*, never the people.
+
+## Overall (round 8, 2026-10-21): **A− / the measurement gaps are fixed in source and unproven in production**
+
+Round 7's five actions were carried out. The retrieval eval was rebuilt and now
+discriminates — hybrid beats bm25 (MRR 0.927 vs 0.894, and 0.750 vs 0.617 on the hardest
+tier), while **hybrid+graph changed no result on any of 64 queries**, the first real
+evidence either way about the graph layer. The two headline defects — 0 failures in 163
+applies, and 1 of 402 drift alerts carrying a branch stamp — are fixed in source and
+still read unchanged in the data, because neither change is deployed yet; that is the
+prediction to check next round. The review backlog was diagnosed rather than drained:
+it is **dormant projects, not neglect** — actively-worked projects carry zero stale
+alerts. And the adoption question was answered from the search log: all three non-owner
+users work exclusively in `contextual-data-fabric`, the one project deliberately
+excluded from the hook rollout, with 0 empty results and a relevant top hit on every
+search between them. Retrieval is not their problem; the habit-forming layer is switched
+off where they work. Full detail in "Round 8".
+
+---
+
+### Round 7 overall (2026-09-28): A− / the premise now has evidence; measurement is the weak half
+
+Four humans read this memory (`arthur` 103 searches, `user-2` 7, `user-3` 2, `user-4` 1), and `user-2`
+both writes and reuses independently — retiring the single-operator caveat that headlined rounds
+3 through 6. Volume: **406 automatic recalls, 113 interactive searches, 113 applies, 119 patterns**;
+conversion steady at 40% and applies-per-search at 1.00. An external contributor found three real
+defects the project's own guards missed, one of which left the stop gate's block decision
+unparseable. Against that: the outcome flag still records **0 failures in 113 applies**, the
+retrieval eval is saturated *and* eight weeks stale against a corpus 75% larger, the review
+backlogs are growing (patches 26, observations 88, alerts 172), and my own provenance-stamp fix
+reached `prd_patches` and `sync_observations` but **not `drift_alerts` (0/16)**, because
+`save_drift_alert` has no `branch`/`commit` parameters. Full analysis in "Round 7" below.
+
+---
+
+### Round 6 overall (2026-08-28): A− / healthy and better-engineered; the value metric is now known to have been inflated
 
 Verification is all-green including MCP liveness (61 tools, `developer` profile), and volume keeps
 growing: **127 automatic recalls across 20 projects, 80 interactive searches, 91 apply events**.
@@ -43,10 +94,14 @@ can be trusted, and it should be expected to look *worse*.
 |---|---|---|---|
 | PRD requirement coverage | A− | = | §3 retrieval fully IMPLEMENTED (superseded hard-excluded; memory_type first-class + filter) |
 | Live health (prod) | A− | = | verify.py all-green incl. MCP liveness; two open warnings (1 deferred embedding, 7 patches awaiting review) |
-| Adoption & value (read-path) | B− | = | **round 6:** volume strongly up (219 recalls, 95 searches, 97 patterns, 28 registered projects, 23 producing reads) while conversion honestly *fell* to 40% — the post-fix number. Still **one** human reading (all 95 searches `arthur`; `pj` at 2 saved patterns) |
-| **Metric integrity** | **B−** | **↑** | post-fix data now exists and behaved exactly as predicted (applies flat, ratio → 1.01), so the funnel figure is finally being measured honestly. Remaining defect: **0 recorded failures in 96 applies** — the `worked` flag is still assertion-grade; needs a harder outcome definition |
-| Engineering quality | A | ↑ | 66 DB-free tests (2 skipped, was 57); CI matrix on Python 3.11–3.14 all green; MIT licensed; the missing allow-path coverage that hid the gate defect is closed |
-| Reliability / robustness | A | = | Cursor/Claude parity maintained through the gate fix (the Cursor gate carried the identical defect); merge-safe rollout to 31 repos; separate recall telemetry |
+| Adoption & value (read-path) | **B** | = | **round 8: the ceiling has a name.** All three non-owner users work *exclusively* in `contextual-data-fabric` — the one project deliberately excluded from the hook rollout, so they get no SessionStart recall, no apply gate and no nudges. Between them: 15 searches, **0 empty results, a relevant top hit every time**. Retrieval is not what is limiting them. `user-4` did return (2026-10-19), correcting round 7. Volume: recalls 406→**545**, patterns 119→**141**, searches 113→**158**, applies 113→**163**. The C2 follow-up PR at CDF is the highest-leverage adoption action open |
+| _round 7 (2026-09-28)_ | B | ↑ | **the single-operator caveat is retired.** Four humans have now searched (`arthur` 103, `user-2` 7, `user-3` 2, `user-4` 1); `user-2` has 7 saved patterns and 10 applies. Recalls 219→**406**, patterns 97→**119**, searches 95→**113**. Conversion flat at **40%** for a third consecutive reading. Not an A: 91% of searches are still one person, and two of the four appeared once and have not returned |
+| **Metric integrity** | **B−** | = | **round 8: one of the two blockers is cleared, the other is written but undeployed.** The retrieval eval was rebuilt (64 queries, three hard tiers) and now **discriminates**: bm25 MRR 0.894 vs hybrid 0.927, and 0.617 vs 0.750 on lexical traps — so hybrid's value is measured rather than asserted for the first time. It also showed **hybrid+graph changing no result on any query**, which is an unflattering but real answer. Still **0 failures in 163 applies** (0 of 141 patterns ever) and **1 of 402** alerts branch-stamped: both fixed in source this round, neither deployed. Grade holds until the data moves |
+| _round 7 (2026-09-28)_ | B− | = | conversion has now read 40% three times running and applies-per-search sits at **1.00**, which is what honest attribution looks like. Held back by two unresolved items, both older than this round: **0 recorded failures in 113 applies** (0 of 119 patterns has *ever* failed), and a retrieval eval that is both saturated and now 8 weeks stale |
+| Engineering quality | A | = | **round 8:** 111 DB-free tests (was 88); new guards on the apply gate's three-door message (both runtimes) and on the golden eval set's shape, so tier 2 cannot decay back into a saturated tier 1. Server side: 493 tests, with three on branch provenance and two on the closed outcome value set. `scripts/triage.py` added |
+| _round 7 (2026-09-28)_ | A | = | 88 DB-free tests, CI green on 3.11–3.14; the delivery-path defect class is now guarded by `test_installer_completeness.py` (references, imports, and both installers). Tempered by the fact that an outside contributor, not the guards, found the three defects that mattered this round |
+| Reliability / robustness | **A−** | = | **round 8:** no new reliability defect found. The CDF exclusion is now understood to carry an adoption cost, not just a coverage one (see Adoption). Review backlog diagnosed via `triage.py`: 200 open alerts, but **2 contradicted and 0 orphaned** — the data is coherent; the volume is dormant projects, not corruption |
+| _round 7 (2026-09-28)_ | A− | ↓ | the stop gate's block decision was **unparseable** whenever a shell edit triggered the reconciler (notice on stdout ahead of the JSON) — fixed, but it means the gate silently failed exactly when it had caught something. Fleet re-verified 31/31 by checksum. `contextual-data-fabric` remains deliberately excluded |
 | Liveness / self-observability | B− | ↑ | **now continuous without a scheduler**: SessionStart fails open but no longer fails *silent*, so every session reports a dead read path. Server-side, a blocked startup connect no longer takes the whole toolset down (2026-08-21). Remaining gap: nothing reports when nobody starts a session |
 
 ## Changes applied
@@ -166,7 +221,7 @@ regression. It declined:
 | Surfaced → applied | 44% | **40%** | the predicted honest drop |
 | Applies per interactive search | 1.14 | **1.01** | 1.21 → 1.14 → 1.01: converging on plausible |
 | Recorded failures | 0 / 80 | **0 / 85** | still implausible — see below |
-| Humans reading | 1 | **1** | all 95 searches `arthur`; `pj` now 2 saved patterns |
+| Humans reading | 1 | **1** | all 95 searches `arthur`; `user-2` now 2 saved patterns |
 
 **Interpretation.** Applies-per-search at 1.01 and a falling conversion are what honest
 attribution looks like after removing a gate that manufactured it. The funnel number is
@@ -199,6 +254,199 @@ it). That is now the top metric-integrity action.
 - **The retrieval eval is UNCHANGED and still saturated** (0.98/0.98/0.98, corpus now
   97 vs the eval's 68). It remains the top-ranked open item in §6 and now measures a
   corpus 43% larger than the one it was built against.
+
+### Round 7 (2026-09-28): the premise is no longer hypothetical — and one of my own fixes only half-landed
+
+A deliberate strengths/weaknesses pass, measured against prod on 2026-09-28.
+
+**Strengths**
+
+- **The single-operator caveat is retired.** Every round since 3 carried the same
+  disclaimer: one human was reading this memory, so "cross-project reuse" was an
+  architecture, not an observation. It now has four readers — `arthur` (103 interactive
+  searches, first 2026-07-14), `user-2` (7, first 2026-09-16), `user-3` (2, 2026-09-24),
+  `user-4` (1, 2026-09-23) — and `user-2` has independently *written* 7 patterns and recorded
+  10 applies. A second person searching, saving, and reusing is the one piece of
+  evidence no amount of engineering could substitute for.
+- **Volume grew without the metrics degrading.** Patterns 97→119, recalls 219→**406**
+  (+85%), searches 95→113, applies 96→113. Conversion held at 40% and applies-per-search
+  landed on **1.00** — the shape honest attribution is supposed to have, now read three
+  times running.
+- **An outside contributor is finding real defects.** `lokeshmuvva` filed two PRs against
+  this repo and surfaced three genuine problems: a runtime `ImportError` dependency
+  (`reconcile_drift_queue.py` → `drift_queue.py`) that the first version of my own guard
+  stayed green through; one remaining orphan (`capture_candidates.py`, bootstrap-only);
+  and a **stdout/JSON collision** that made the stop gate's block decision unparseable
+  precisely when the reconciler had something to say. That is the project working as a
+  shared artifact rather than a personal one.
+- **The delivery-defect class is now guarded, and the fleet is verified.**
+  `tests/test_installer_completeness.py` compares what is *referenced* (by path and by
+  import) against what both installers actually ship, using tuple membership rather than
+  substring matching — the weaker version produced a false negative on a real orphan.
+  88 DB-free tests, CI green on 3.11–3.14, and all five hooks verified present in 31/31
+  projects by checksum.
+- **The branch guard works in the field.** Writes now carry `branch`/`commit` on the
+  paths that support it, and real stamps are landing from real branches
+  (`project-sentinel` on `main`, `agentic-graph-analytics` on `feat/byoc-packaging`).
+- Live health: ALL CHECKS PASSED.
+
+**Weaknesses**
+
+- **F2 (provenance stamps) half-landed, on the path that most needs it — my defect.**
+  Since the 2026-09-25 rollout, `prd_patches` carry branch stamps 5/5 and
+  `sync_observations` 5/5, but `drift_alerts` carry them **0/16**. Root cause:
+  `save_drift_alert` in the MCP server (`pattern_memory_tools.py:921`) accepts no
+  `branch`/`commit` parameters, so the skill dutifully passes fields the tool discards.
+  Drift alerts are the collection where "which branch was this true on?" matters most,
+  and it is the one collection that cannot answer. Fix belongs in the server repo.
+- **The outcome flag is still fiction.** 113 applies, 102 recorded outcomes,
+  **0 failures** — and 0 of 119 patterns has *ever* recorded a failure. Unchanged across
+  three rounds. Until something can be marked as having not worked, `success_rate` is a
+  constant, and the salience multiplier built on it ranks nothing.
+- **The retrieval eval is saturated *and* now stale.** Last run 2026-08-02 at n=29,
+  scoring 0.98/0.98/0.98 against a 68-pattern corpus. The corpus is now 119 (+75%) and
+  eight weeks have passed. A benchmark that cannot fail and is no longer run is not
+  evidence of retrieval quality.
+- **Triage backlogs are growing faster than they are worked.** Proposed PRD patches
+  12→**26**, unprocessed sync observations 68→**88**, open drift alerts 152→**172**.
+  Every one of these is by design never auto-applied, which is correct — but the
+  human-review queue is the system's actual bottleneck and nothing is draining it.
+- **The new readers are shallow.** 103 of 113 searches (91%) are still one person;
+  `user-3` and `user-4` each searched once and have not returned. Four readers is a real
+  change from one, but it is not yet a habit for three of the four.
+- Deferred embeddings 1→2.
+
+**Net:** the strengths are structural (multi-human use, external contribution, a guarded
+delivery path) and the weaknesses are concentrated in measurement — an outcome flag that
+cannot record failure, an eval that cannot fail, a backlog nobody drains, and one
+provenance field I said was delivered that only reached two collections of three.
+
+### Round 8 (2026-10-21): the five round-7 actions, worked
+
+Round 7 ended with a ranked list of five actions. This round is what happened when
+they were carried out. Three are done, one is delivered-but-awaiting-a-decision, and
+one turned out to have an evidence-based answer instead of the question it was asked as.
+
+Corpus at this reading: **141 patterns, 545 automatic recalls, 158 interactive
+searches, 163 applies, 29 registered projects.**
+
+**1. `save-drift-alert` now accepts `branch` / `commit` — DONE (awaiting deploy).**
+Confirmed the exact mechanism: the tool declared no parameters for them, so the MCP
+layer dropped both before the function body ran, while `prd_patches` and
+`sync_observations` — written through generic `upsert-document`, which passes arbitrary
+fields — kept theirs. Today's reading is **1 of 402** drift alerts carrying a branch
+against **73 of 208** patches, so the asymmetry is confirmed, not inferred. Fixed on
+`fix/shared-memory-provenance-and-outcome` in the server repo; a close now additionally
+stamps `closed_branch` / `closed_commit`, because a close recorded on a feature branch
+is provisional until that commit reaches the default branch. **Not yet visible in the
+data: the server has to be deployed and the fleet re-rolled.**
+
+**2. The outcome flag can say "no" — DONE (awaiting deploy).**
+Two mechanisms were keeping it at yes, and only one of them was the one round 7 named.
+The server computed `worked = outcome != "failed"`, so *every* unrecognised value —
+`"success"`, `"ok"`, a typo, a stray space — recorded a positive signal, on top of the
+parameter defaulting to `"worked"`. And the client side was worse: **the word `outcome`
+appeared in no skill, hook, rule, gate message or protocol file anywhere.** The server
+has supported `outcome='failed'` with full negative-signal handling since it shipped.
+The capability was dark.
+
+The structural cause was the gate itself. It offered **two doors** — applied (a success)
+or dismissed (reviewed and never tried) — and a pattern that *was* tried and did not
+help had nowhere to go, so the honest verdict left through the dismissal door and the
+evidence vanished. Both runtimes' gates now name three outcomes, define failure
+mechanically (checks it should have made pass still failing / reverted for another
+approach / introduced a defect you then had to fix), and say plainly not to dismiss
+something that was actually tried. Guard tests on both gates assert all three doors are
+present and distinguishable. Today's reading is still **0 failures in 163 applies, 0 of
+141 patterns ever failed** — unchanged, as expected, because nothing is deployed yet.
+This is the round's prediction to check next time.
+
+**3. The retrieval eval discriminates again — DONE, and it produced a real result.**
+The old set could not fail: 29 queries from 2026-07 against a 68-pattern corpus, MRR
+0.98 identical for bm25, hybrid *and* hybrid+graph, unrun for eleven weeks while the
+corpus more than doubled. 35 new queries in three tiers were added (the original 29 kept
+as a regression floor): `hard-paraphrase` states the symptom in a stuck developer's words
+and withholds the pattern's distinctive vocabulary; `lexical-trap` sits on near-duplicate
+clusters where surface similarity is high; `hard-concept` is vague and cross-project. All
+49 expected keys were verified present before committing.
+
+First run, 64 queries against a 141-pattern corpus:
+
+| mode | R@1 | R@3 | R@5 | MRR |
+|---|---|---|---|---|
+| bm25 | 0.86 | 0.92 | 0.94 | **0.894** |
+| hybrid | 0.88 | 0.98 | 0.98 | **0.927** |
+| hybrid+graph | 0.88 | 0.98 | 0.98 | **0.927** |
+
+MRR by hard tier — bm25 → hybrid: lexical-trap **0.617 → 0.750** (R@3 0.667 → 1.000),
+hard-paraphrase 0.798 → 0.833, hard-concept 0.933 → 1.000. The legacy tiers score 1.000
+for every mode, confirming saturation.
+
+Two findings. **Hybrid demonstrably earns its cost**, most of all on lexical traps —
+which is the first time this project has had evidence for that rather than an assertion.
+And **hybrid+graph is identical to hybrid on every single query in every tier**: the
+graph layer changed nothing. That is now measured rather than hidden, but it is *not*
+conclusive — none of these queries was built to *require* a 1-hop `relates_to`
+expansion, so the honest reading is "no observed benefit on a set that does not
+specifically demand it". A relational tier is the obvious next addition, and it is now
+the top open question about the architecture.
+
+`tests/test_golden_queries.py` guards the set's shape so tier 2 cannot decay back into
+tier 1 — including a check that no query contains its own answer key or names the
+target's project, which is how a set gets easier without anyone deciding to make it so.
+
+**4. The review queues — mechanism delivered, the capping decision is the owner's.**
+`scripts/triage.py` reports all three queues per-project with age buckets, plus three
+staleness signals that need no judgement. The first run reframes the problem entirely:
+**the backlog is not un-worked, it is dormant.** Projects people are actively in carry
+*zero* stale alerts — `project-sentinel` 13 open / 0 stale, `arango-schema-analyzer`
+11/0, `arango-sparql-py` 11/0, `contextual-data-fabric` 8/0. The backlog is whole
+projects that stopped: `arangodb-data-tools-rs` 36 open and all 36 older than 60 days,
+`dnb-er` 14/14, `jlr-contextual-memory-fabric` 10/10,
+`network-asset-management-demo` 10/10, `domyn-gdelt` 9/9. Of 200 open alerts, **106
+predate August 22**; only **2** are contradicted (a closed row exists for the same
+`project_id`+`req_id`) and **0** are orphaned, so the data itself is coherent.
+
+`--age-out` moves ancient alerts to `status: "stale"` — deliberately *not* `closed`,
+because closing asserts the gap was fixed and nobody has verified that, while stale
+asserts only that nobody has looked in 60+ days, which the timestamps prove. Reversible
+by one UPDATE, which the script prints before writing. **Not run.** It mutates 105 shared
+documents and the judgement about which projects are dormant belongs to their owner.
+
+**5. "Why don't the new readers come back" had an answer in the data.**
+Round 7 proposed asking them. The search log answers it without asking, and corrects two
+things round 7 asserted.
+
+| | searches | empty results | relevant top hit | first | last |
+|---|---|---|---|---|---|
+| `arthur` | 143 | 4 | 138 | 2026-07-14 | 2026-10-21 |
+| `user-2` | 11 | 0 | 11 | 2026-09-16 | 2026-10-09 |
+| `user-3` | 2 | 0 | 2 | 2026-09-24 | 2026-09-24 |
+| `user-4` | 2 | 0 | 2 | 2026-09-23 | 2026-10-19 |
+
+First correction: **`user-4` did come back** (2026-10-19, nearly four weeks later), and
+`user-2` is still active. Round 7's "two appeared once and have not returned" was true on
+2026-09-28 and is no longer true.
+
+Second, and the substantive one: **all three non-`arthur` users work exclusively in
+`contextual-data-fabric`** — the single project deliberately excluded from the hook
+rollout by the C2 decision of 2026-08-26, where the hooks and `.cursor/` additions were
+removed and never replaced. They have no SessionStart recall, no apply gate, and no
+nudges. Every one of `arthur`'s 143 searches happens in a project with the full
+machinery; all 15 of theirs happen in the one project without it.
+
+Retrieval was not the problem for them: **0 empty results between them, and a relevant
+top hit on every single search.** The product works; the habit-forming layer was
+switched off in the only place they use it. The C2 decision said enforcement at CDF
+"should arrive as a reviewed PR in that repo" — **that PR has never been raised**, and
+it is now the single highest-leverage adoption action available.
+
+**Net for round 8:** two fixes written and tested but not yet deployed, so the two
+headline defects (0 failures, 0 branch stamps on alerts) still read exactly as they did
+in round 7 — the honest state is "fixed in source, unproven in production". One
+benchmark rebuilt and now carrying real information, including an unflattering result
+about the graph layer. One backlog diagnosed as dormancy rather than neglect. And one
+adoption question answered from evidence, with a concrete owner action behind it.
 
 ## 1. PRD requirement coverage
 
@@ -275,7 +523,7 @@ own audits always used the line-local gate.
    the protocol's own attribution step absent from 90% of the fleet.
 2. **Headcount is still one.** `search_log.by` is `arthur` for **all 80** interactive searches;
    the other 127 reads are `session_recall` (automatic, no human). Applies: `arthur` 82, unattributed 9.
-   Writes: `arthur` 70, `pj` 1, unattributed 5. PJ's single contribution remains the PR #1 fix,
+   Writes: `arthur` 70, `user-2` 1, unattributed 5. user-2's single contribution remains the PR #1 fix,
    with zero searches. Volume grew ~12% this round; the multi-human evidence this system exists to
    produce still does not exist, and no commit can create it.
 3. **Conversion is flat.** 44% → 44% across a round in which patterns grew 12% and searches grew
@@ -309,6 +557,28 @@ own audits always used the line-local gate.
 - Capture miner correction-detection is still regex-narrow (by design).
 
 ## 5. Recommended next actions
+
+**Ranked for round 7 (2026-09-28):**
+
+1. **Add `branch`/`commit` to `save_drift_alert`.** The one item that is a live, known,
+   half-delivered fix of mine rather than a judgement call. `prd_patches` 5/5 and
+   `sync_observations` 5/5 carry stamps; `drift_alerts` **0/16**, because the tool drops the
+   fields the skill passes (`pattern_memory_tools.py:921`, server repo). Smallest change on this
+   list and the one on the collection where branch provenance matters most.
+2. **Give the outcome flag a way to say "no".** 113 applies, 0 failures, 0 of 119 patterns ever
+   failed — the third consecutive round with this reading, so the gate fix was not the cause.
+   `success_rate` is currently a constant and the salience multiplier built on it ranks nothing.
+   Needs a definition of failure that an agent cannot satisfy by assertion.
+3. **Rebuild the retrieval eval.** Now both saturated (0.98/0.98/0.98, identical across bm25,
+   hybrid, and hybrid+graph) *and* stale (last run 2026-08-02, n=29, against a 68-pattern corpus
+   that is now 119). Detail unchanged in item 4 of the round-6 list below.
+4. **Drain, or deliberately cap, the review queues.** Proposed patches 12→26, unprocessed
+   observations 68→88, open alerts 152→172. Never auto-applying these is correct policy; growing
+   them without a review cadence turns the policy into a silent backlog.
+5. **Deepen the new readers.** Four humans have searched, but three of them totalled 10 searches
+   between them and two have not returned. The blocker is no longer "is anyone else using it" but
+   "does it stick after the first try" — worth asking `user-3` and `user-4` directly what the
+   first session did or did not give them.
 
 **Ranked for round 6:**
 
