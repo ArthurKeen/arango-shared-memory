@@ -157,12 +157,21 @@ SCHEMAS = {
                 "project_id": {"type": "string"},
                 "req_id": {"type": "string"},
                 "classification": {"enum": ["MISSING", "PARTIAL", None]},
-                "status": {"enum": ["open", "closed", None]},
+                # "stale" is a THIRD state, added 2026-10-23 for scripts/triage.py
+                # --age-out. It is not "closed": closing asserts the gap was fixed,
+                # which nobody verified. Stale asserts only that neither the alert nor
+                # its project has been touched in 60+ days, which the timestamps prove.
+                # Every reader filters `status == "open"` exactly, so widening the enum
+                # is what makes an aged-out row drop out of the SessionStart digest,
+                # verify.py's open count and the visualizer's queries -- with no reader
+                # change at all. A later /prd-sync that re-detects the gap upserts
+                # status "open" again, which correctly revives it.
+                "status": {"enum": ["open", "closed", "stale", None]},
             },
         },
         "level": "moderate",
         "message": "drift_alerts: needs project_id + req_id; "
-                   "classification MISSING|PARTIAL; status open|closed",
+                   "classification MISSING|PARTIAL; status open|closed|stale",
     },
     "prd_patches": {
         "rule": {

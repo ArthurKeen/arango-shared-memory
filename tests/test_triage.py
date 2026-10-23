@@ -106,5 +106,72 @@ class TestTriageAgeOutSafety(unittest.TestCase):
         self.assertIn("prior_status", reversal.group(1))
 
 
+class TestTriageRespectsTheCollectionSchema(unittest.TestCase):
+    """The status triage WRITES must be a value the schema this repo DEFINES allows.
+
+    This is the guard for a bug that reached production use. --age-out wrote
+    status "stale" while scripts/setup_schema.py declared status as the closed enum
+    ["open", "closed", null] at validation level "moderate". ArangoDB rejected the
+    whole batch:
+
+        [HTTP 400][ERR 1620] drift_alerts: needs project_id + req_id;
+        classification MISSING|PARTIAL; status open|closed
+
+    Nothing was written -- the database refused it atomically, which is the system
+    working. But the two files sit in the same repository, and nothing compared them,
+    so a value the project itself forbids got as far as a live write. The enum has
+    since been widened to include "stale"; this test is what keeps the two in step if
+    either side changes again.
+    """
+
+    def setUp(self):
+        self.src = _read()
+        schema_path = os.path.join(REPO, "scripts", "setup_schema.py")
+        with open(schema_path, encoding="utf-8") as fh:
+            self.schema_src = fh.read()
+
+    def _declared_status_enum(self):
+        """The status enum from the drift_alerts block of setup_schema.py."""
+        # Anchor on "rule", because setup_schema.py has TWO "drift_alerts" keys -- one
+        # in INDEXES and one in SCHEMAS -- and the looser pattern matched the index
+        # block, found no status enum, and failed. (Caught by the guard-the-guard test
+        # below, which is the only reason this was not a silently-passing check.)
+        block = re.search(r'"drift_alerts":\s*\{\s*"rule".*?"level"',
+                          self.schema_src, re.DOTALL)
+        self.assertTrue(block, "drift_alerts schema block not found — guard is inert")
+        m = re.search(r'"status":\s*\{"enum":\s*\[(.*?)\]\}', block.group(0))
+        self.assertTrue(m, "status enum not found in the drift_alerts schema")
+        return {v.strip().strip('"') for v in m.group(1).split(",") if v.strip() != "None"}
+
+    def test_the_guard_can_read_both_sides(self):
+        """Guard the guard: either regex failing silently would pass everything."""
+        enum = self._declared_status_enum()
+        self.assertIn("open", enum)
+        self.assertIn("closed", enum)
+        self.assertTrue(_block(self.src, "AGE_OUT_AQL"))
+
+    def test_the_age_out_status_is_permitted_by_the_schema(self):
+        written = re.findall(r'status:\s*"([a-z]+)"', _block(self.src, "AGE_OUT_AQL"))
+        self.assertTrue(written, "AGE_OUT_AQL sets no literal status")
+        enum = self._declared_status_enum()
+        for value in written:
+            self.assertIn(
+                value, enum,
+                f"triage writes status {value!r}, which scripts/setup_schema.py does "
+                f"not allow (enum: {sorted(enum)}). ArangoDB will reject the batch.")
+
+    def test_the_validator_message_lists_every_allowed_status(self):
+        """The message is what an operator sees when a write is refused. If it does not
+        name the value that was rejected, the error sends them hunting in the wrong
+        place -- which is exactly what happened here."""
+        enum = self._declared_status_enum()
+        msg = re.search(r'"message":\s*"drift_alerts:(.*?)",\n', self.schema_src,
+                        re.DOTALL)
+        self.assertTrue(msg, "drift_alerts validator message not found")
+        for value in enum:
+            self.assertIn(value, msg.group(1),
+                          f"validator message does not mention status {value!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
