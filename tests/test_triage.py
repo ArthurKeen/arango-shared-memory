@@ -371,13 +371,65 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
     def test_a_failed_resync_tells_the_operator_how_to_finish(self):
         """The age-out is already committed by then, so silence would strand it."""
         self.assertRegex(self.src, r"warning: alerts were aged out but open_gaps was NOT")
-        self.assertIn("run: triage.py --repair-gaps --yes", self.src)
+        # Assembled, not a single literal: the hint carries --project when the sweep
+        # was scoped, so assert on the pieces rather than a contiguous string.
+        idx = self.src.index("warning: alerts were aged out")
+        after = self.src[idx:idx + 400]
+        self.assertIn("run: triage.py --repair-gaps", after)
+        self.assertIn('" --yes', after)
 
     def test_nothing_to_age_out_still_points_at_the_repair(self):
         """Once everything old is swept, this is the only reachable branch — if it
         says nothing, a wrong counter stays wrong forever."""
         idx = self.src.index("nothing older than the threshold")
-        self.assertIn("--repair-gaps --yes", self.src[idx:idx + 700])
+        branch = self.src[idx:idx + 700]
+        self.assertIn("triage.py --repair-gaps", branch)
+        self.assertIn('" --yes"', branch)
+
+
+class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
+    """open_gaps has two writers with two different definitions.
+
+    /prd-sync sets it from its audit's MISSING+PARTIAL count; the repair recomputes it
+    from the live open alerts. On a project that still syncs these legitimately differ
+    (project-sentinel: recorded 10, live 1, last_sync 2026-10-01), so "repairing" it
+    would overwrite the audit's answer with a different question's answer and the next
+    sync would put it back -- two writers oscillating, and the documented "a repeat run
+    selects nothing" would be false.
+
+    On a DORMANT project there is no contention: /prd-sync is not going to run, which
+    is both why the counter went stale and why this is the only thing that can fix it.
+    """
+
+    def setUp(self):
+        self.src = _read()
+
+    def test_the_repair_is_restricted_to_dormant_projects(self):
+        drift = _block(self.src, "DRIFTED_GAPS_AQL")
+        self.assertIn("last_sync", drift,
+                      "the repair does not check whether the project still syncs — it "
+                      "would contend with /prd-sync over an active project's counter")
+        self.assertRegex(drift, r"r\.project_id IN dormant",
+                         "DRIFTED_GAPS_AQL does not restrict to the dormant set")
+
+    def test_the_printed_follow_up_carries_the_sweep_s_scope(self):
+        """After a --project sweep, an unscoped `--repair-gaps --yes` rewrites
+        open_gaps fleet-wide -- so the documented undo would itself make
+        out-of-scope writes."""
+        self.assertIn('f" --project {ONLY_PROJECT}" if ONLY_PROJECT', self.src,
+                      "the printed --repair-gaps follow-up drops --project")
+        self.assertGreaterEqual(
+            self.src.count("--project {ONLY_PROJECT}"), 3,
+            "not every printed --repair-gaps hint carries the scope (reversal, the "
+            "nothing-to-sweep branch, and the failure warning)")
+
+    def test_the_sweep_dry_run_names_the_registry_writes(self):
+        """Listing only alert keys made the second mutation invisible until after it
+        had happened."""
+        idx = self.src.index("DRY RUN — add --yes to commit")
+        branch = self.src[idx:idx + 900]
+        self.assertIn("project_registry.open_gaps would be recomputed", branch,
+                      "the --age-out dry run does not mention its registry writes")
 
 
 class TestVerifyReportsEveryAlertStatus(unittest.TestCase):

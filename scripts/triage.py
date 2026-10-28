@@ -246,9 +246,24 @@ FOR a IN drift_alerts FILTER a._key IN @keys
 # counter being too HIGH (a sweep whose resync was missed -- the 2026-10-23 production
 # sweep of 53 rows ran before the resync existed) and too LOW (after a reversal), and
 # it needs no memory of how the drift arose. A repeat run selects nothing.
+# DORMANT PROJECTS ONLY, and that restriction is load-bearing rather than cautious.
+# open_gaps has two writers with two different definitions: /prd-sync sets it to the
+# latest audit's MISSING+PARTIAL count (SKILL.md), while this recomputes it from the
+# live open alerts. On a project that still syncs, those legitimately differ --
+# project-sentinel records 10 against 1 live open alert and synced 2026-10-01 -- so
+# "repairing" it would not be a repair at all: it would overwrite the audit's answer
+# with a different question's answer, and the next /prd-sync would put it back. Two
+# writers oscillating, and the claim that a repeat run selects nothing would be false.
+#
+# On a DORMANT project there is no contention: /prd-sync is not going to run, which is
+# both why the counter went stale and why this is the only thing that can fix it.
 DRIFTED_GAPS_AQL = """
+LET dormant = (FOR r IN project_registry
+               FILTER r.last_sync == null OR LEFT(r.last_sync, 10) < LEFT(@cutoff, 10)
+               RETURN r.project_id)
 FOR r IN project_registry
   FILTER @proj == "" OR r.project_id == @proj
+  FILTER r.project_id IN dormant
   LET live = LENGTH(FOR a IN drift_alerts
                     FILTER a.project_id == r.project_id AND a.status == "open" RETURN 1)
   LET recorded = r.open_gaps == null ? 0 : r.open_gaps
@@ -344,7 +359,8 @@ def main() -> int:
 
     def drifted():
         """Projects whose open_gaps disagrees with the live count, honouring --project."""
-        return list(db.aql.execute(DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT}))
+        return list(db.aql.execute(
+            DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
 
     def resync_gaps(label, projects):
         """Recompute open_gaps for exactly `projects`. No-op on an empty list.
@@ -404,7 +420,8 @@ def main() -> int:
         drift_rows = drifted()
         if drift_rows:
             print(f"    But {len(drift_rows)} project(s) have a drifted open_gaps "
-                  "counter.\n    Run: triage.py --repair-gaps --yes")
+                  "counter.\n    Run: triage.py --repair-gaps"
+                  + (f" --project {ONLY_PROJECT}" if ONLY_PROJECT else "") + " --yes")
         return 0
 
     reason = f"no review in {STALE_DAYS}+ days; aged out by scripts/triage.py"
@@ -418,12 +435,22 @@ def main() -> int:
             print(f"    {k}")
         if len(ancient) > 10:
             print(f"    … {len(ancient) - 10} more")
+        # The sweep writes to project_registry as well. Listing only alert keys made
+        # the second mutation invisible until it had already happened.
+        swept_projects = sorted({r["project"] for r in db.aql.execute(
+            "FOR a IN drift_alerts FILTER a._key IN @keys "
+            "COLLECT project = a.project_id RETURN { project }",
+            bind_vars={"keys": ancient})})
+        print(f"\n    …and project_registry.open_gaps would be recomputed for "
+              f"{len(swept_projects)} project(s): {', '.join(swept_projects)}")
         return 0
 
     now = now_iso()
     print("\n  REVERSAL (copy BOTH before continuing — the sweep makes two mutations):")
     print(f"    1. {REVERSAL.format(now=now)}")
-    print("    2. triage.py --repair-gaps --yes   (recomputes open_gaps afterwards)\n")
+    scope = f" --project {ONLY_PROJECT}" if ONLY_PROJECT else ""
+    print(f"    2. triage.py --repair-gaps{scope} --yes   (recomputes open_gaps "
+          "afterwards)\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
@@ -447,7 +474,8 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(
             f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
-            "run: triage.py --repair-gaps --yes\n")
+            "run: triage.py --repair-gaps"
+            + (f" --project {ONLY_PROJECT}" if ONLY_PROJECT else "") + " --yes\n")
         return 1
     return 0
 

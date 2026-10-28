@@ -433,9 +433,28 @@ only **2** alerts are contradicted (a closed row exists for the same
 
 `--age-out` moves ancient alerts to `status: "stale"` — deliberately *not* `closed`,
 because closing asserts the gap was fixed and nobody has verified that, while stale
-asserts only that nobody has looked in 60+ days, which the timestamps prove. Reversible
-by one UPDATE, which the script prints before writing. **Not run.** It mutates 105 shared
-documents and the judgement about which projects are dormant belongs to their owner.
+asserts only that nobody has looked in 60+ days, which the timestamps prove.
+
+> **Updated 2026-10-28.** Two statements here were true when written and are no longer.
+>
+> **It was run.** On 2026-10-23, 53 alerts across 8 dormant projects moved to `stale`
+> and the open count fell 188 → 135. (It took a schema fix first: `status` was a closed
+> enum in this repo's own `setup_schema.py` and `"stale"` was refused with ERR 1620 —
+> the database caught it and nothing was written.)
+>
+> **It is no longer reversible by one UPDATE.** The sweep makes *two* mutations: the
+> alert status, and the denormalized `project_registry.open_gaps`, which only
+> `/prd-sync` otherwise rewrites — and these projects were chosen precisely for not
+> running it, so a missed repair would have been permanent. A full undo is the printed
+> UPDATE **plus** `triage.py --repair-gaps --yes`, and the script now prints both
+> together. An operator who followed the older wording would have restored 53 alerts
+> and left 8 counters at zero.
+>
+> `--repair-gaps` is restricted to dormant projects on purpose. `open_gaps` has two
+> writers with different definitions — `/prd-sync` sets it from its audit's
+> MISSING+PARTIAL count, the repair recomputes it from live open alerts — and on a
+> still-syncing project those legitimately differ, so "repairing" it would overwrite
+> the audit's answer and the next sync would put it back.
 
 **5. "Why don't the new readers come back" had an answer in the data.**
 Round 7 proposed asking them. The search log answers it without asking, and corrects two
