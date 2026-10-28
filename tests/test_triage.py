@@ -235,7 +235,8 @@ class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
         self.assertIn("project_registry", resync)
         self.assertIn("open_gaps", resync)
         # It must run on the write path, not merely be defined.
-        self.assertRegex(self.src, r"db\.aql\.execute\(RESYNC_GAPS_AQL")
+        self.assertRegex(self.src, r"db\.aql\.execute\(\s*RESYNC_GAPS_AQL",
+                         "RESYNC_GAPS_AQL is defined but never executed")
 
     def test_the_counter_is_recomputed_not_decremented(self):
         """Subtracting the sweep size drifts further on a partial or repeated run;
@@ -281,14 +282,39 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
                       "no way to repair a sweep whose counter resync was missed")
         self.assertIn("if REPAIR_GAPS:", self.src)
 
-    def test_the_repair_set_comes_from_stale_rows_not_this_run(self):
-        """Driving it from rows swept in THIS run is what made earlier sweeps
-        unrepairable."""
-        self.assertIn("STALE_PROJECTS_AQL", self.src)
-        stale = _block(self.src, "STALE_PROJECTS_AQL")
-        self.assertRegex(stale, r'a\.status == "stale"',
-                         "the repair set is not derived from the stale alerts")
-        self.assertIn("db.aql.execute(STALE_PROJECTS_AQL)", self.src)
+    def test_the_repair_set_is_derived_from_counter_drift(self):
+        """Not from `status == "stale"`, which was circular: step 1 of the printed
+        reversal is exactly what stops a row being stale, so step 2 found nothing and
+        left open_gaps at 0 against restored open alerts. Drift is symmetric -- it
+        catches the counter being too high after a missed sweep resync AND too low
+        after a reversal -- and needs no memory of how the drift arose."""
+        self.assertNotIn("STALE_PROJECTS_AQL", self.src,
+                         "the repair still keys off stale status, which a reversal "
+                         "clears before the repair can run")
+        self.assertIn("DRIFTED_GAPS_AQL", self.src)
+        drift = _block(self.src, "DRIFTED_GAPS_AQL")
+        self.assertIn("project_registry", drift)
+        self.assertIn("recorded != live", drift,
+                      "the repair set is not based on a disagreement between the "
+                      "recorded counter and the live count")
+
+    def test_the_repair_honours_the_project_scope(self):
+        """--project filtered the alerts but not the registry writes, so
+        `--project X --age-out --yes` rewrote open_gaps for every drifted project --
+        shared writes outside the stated scope, uncovered by the printed reversal."""
+        drift = _block(self.src, "DRIFTED_GAPS_AQL")
+        self.assertRegex(drift, r'@proj == "" OR r\.project_id == @proj',
+                         "DRIFTED_GAPS_AQL ignores --project")
+        self.assertIn('bind_vars={"proj": ONLY_PROJECT}', self.src)
+
+    def test_repair_gaps_refuses_to_mask_an_age_out(self):
+        """The repair branch returns first, so the combination printed the sweep
+        banner, did only the repair and exited 0 without sweeping anything."""
+        idx = self.src.index("if REPAIR_GAPS:")
+        branch = self.src[idx:idx + 500]
+        self.assertIn("if AGE_OUT:", branch,
+                      "--repair-gaps silently swallows --age-out")
+        self.assertIn("two commands", branch)
 
     def test_repair_gaps_also_requires_explicit_confirmation(self):
         """It writes to shared data, so it gets the same gate as --age-out."""
@@ -312,7 +338,7 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         """Once everything old is swept, this is the only reachable branch — if it
         says nothing, a wrong counter stays wrong forever."""
         idx = self.src.index("nothing older than the threshold")
-        self.assertIn("--repair-gaps --yes", self.src[idx:idx + 600])
+        self.assertIn("--repair-gaps --yes", self.src[idx:idx + 700])
 
 
 class TestVerifyReportsEveryAlertStatus(unittest.TestCase):
