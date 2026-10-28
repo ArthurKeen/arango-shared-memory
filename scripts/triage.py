@@ -214,6 +214,21 @@ FOR a IN drift_alerts FILTER a._key IN @keys
   RETURN NEW._key
 """
 
+# project_registry.open_gaps is a DENORMALIZED count, and only /prd-sync rewrites it.
+# Ageing alerts out without resyncing it leaves it permanently wrong -- permanently,
+# because these projects were selected precisely for NOT running /prd-sync. It is read
+# by verify.py and by the visualizer's "open_gaps >= 1" orange rule, so a swept project
+# would keep flashing a gap count it no longer has. Recomputed from the alerts rather
+# than decremented, so a partial or repeated run converges instead of drifting further.
+RESYNC_GAPS_AQL = """
+FOR p IN @projects
+  LET live = LENGTH(FOR a IN drift_alerts
+                    FILTER a.project_id == p AND a.status == "open" RETURN 1)
+  FOR r IN project_registry FILTER r.project_id == p
+    UPDATE r WITH { open_gaps: live } IN project_registry
+    RETURN { project: p, open_gaps: live }
+"""
+
 REVERSAL = ("FOR a IN drift_alerts FILTER a.aged_out_at == \"{now}\" "
             "UPDATE a WITH {{ status: a.prior_status, aged_out_at: null, "
             "aged_out_by: null, aged_out_reason: null, prior_status: null }} "
@@ -313,6 +328,20 @@ def main() -> int:
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
+
+    # Keep the denormalized counter honest in the same breath, or the sweep leaves
+    # every swept project advertising gaps it no longer has (see RESYNC_GAPS_AQL).
+    # Read the project ids back from the rows themselves. Deriving them by splitting
+    # the _key would be a guess: the key is a SANITISED project_id + req_id, and a
+    # req_id can contain the separator (there are live keys like
+    # "arango-ontoextract_-6.5 VCR playback").
+    projects = sorted(r["project"] for r in db.aql.execute(
+        "FOR a IN drift_alerts FILTER a._key IN @keys "
+        "COLLECT project = a.project_id RETURN { project }",
+        bind_vars={"keys": updated}))
+    resynced = list(db.aql.execute(RESYNC_GAPS_AQL, bind_vars={"projects": projects}))
+    print(f"  resynced open_gaps for {len(resynced)} project(s): "
+          + ", ".join(f"{r['project']}={r['open_gaps']}" for r in resynced))
     return 0
 
 

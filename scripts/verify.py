@@ -369,9 +369,15 @@ def main() -> int:
     if db.has_collection("shared_patterns"):
         print(f"  shared_patterns:   {count('shared_patterns')} pattern(s)")
     if db.has_collection("drift_alerts"):
-        opened = count("drift_alerts", 'FILTER d.status == "open"')
-        closed = count("drift_alerts", 'FILTER d.status == "closed"')
-        print(f"  drift_alerts:      {opened} open / {closed} closed")
+        # Every status, not just open/closed. Counting two of four reported 54 of 375
+        # rows NOWHERE, and made the aged-out sweep read as 53 gaps resolved -- the
+        # exact flattering misreading `stale` exists to avoid.
+        by_status = {r["s"]: r["n"] for r in db.aql.execute(
+            "FOR d IN drift_alerts COLLECT s = d.status WITH COUNT INTO n RETURN {s, n}")}
+        total = sum(by_status.values())
+        shown = " / ".join(f"{n} {s}" for s, n in sorted(
+            by_status.items(), key=lambda kv: -kv[1]))
+        print(f"  drift_alerts:      {shown}  ({total} total)")
     if db.has_collection("prd_patches"):
         by_state = list(db.aql.execute(
             "FOR p IN prd_patches COLLECT s = p.review_state WITH COUNT INTO n RETURN {s, n}"))

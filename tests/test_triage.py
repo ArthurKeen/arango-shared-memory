@@ -173,5 +173,88 @@ class TestTriageRespectsTheCollectionSchema(unittest.TestCase):
                           f"validator message does not mention status {value!r}")
 
 
+    def test_every_status_the_theme_colours_is_allowed_by_the_schema(self):
+        """The enum and the visualizer's status rules must agree.
+
+        The previous round widened the enum for "stale" and left out "undocumented" --
+        a value that is live in the collection AND that scripts/install_visualizer.py
+        ships a colour rule for, in the same commit. The guard added then only compared
+        AGE_OUT_AQL against the enum, so it had nothing to say about a value triage
+        never writes.
+
+        install_visualizer.py's rules are the closest in-repo census of the status
+        values this project believes exist, which makes them the right thing to check
+        against without needing a database in CI. Validation level "moderate" lets an
+        already-invalid row be updated, which is why the omission broke nothing
+        visible; a fresh write of that value would be refused.
+        """
+        vis = os.path.join(REPO, "scripts", "install_visualizer.py")
+        with open(vis, encoding="utf-8") as fh:
+            vis_src = fh.read()
+        # Bounded by the NEXT collection key, not by the first "],\n": the theme block
+        # has an earlier list (hoverInfoAttributes) that the looser pattern stopped at,
+        # yielding an empty rule set. Caught by the length assertion below -- without
+        # it this check would have passed vacuously, which is the failure mode it
+        # exists to prevent.
+        block = re.search(r'"drift_alerts":\s*\{.*?"prd_patches":', vis_src, re.DOTALL)
+        self.assertTrue(block, "drift_alerts theme block not found — guard is inert")
+        themed = set(re.findall(r'_rule\("status",\s*"string",\s*"=",\s*"([a-z]+)"',
+                                block.group(0)))
+        self.assertGreaterEqual(len(themed), 3,
+                                f"theme-rule scan found only {themed} — regex is broken")
+        enum = self._declared_status_enum()
+        missing = sorted(themed - enum)
+        self.assertEqual(
+            missing, [],
+            f"install_visualizer.py colours status {missing}, which "
+            f"scripts/setup_schema.py does not allow (enum: {sorted(enum)}). Writing "
+            "one of those values would be refused with ERR 1620.")
+
+
+class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
+    """Ageing an alert out must also fix project_registry.open_gaps.
+
+    open_gaps is denormalized and only /prd-sync rewrites it. The first --age-out run
+    swept 53 alerts and left all 8 affected projects advertising their pre-sweep count
+    against 0 actual open rows (dnb-er 14, jlr-contextual-memory-fabric 10,
+    network-asset-management-demo 10, domyn-gdelt 9, fraud-intelligence 6, ...).
+
+    Permanently wrong, too: those projects were chosen precisely BECAUSE they do not
+    run /prd-sync, so the one thing that would correct the counter is the one thing
+    that will not happen. It is read by verify.py and by the visualizer's
+    "open_gaps >= 1" orange rule.
+    """
+
+    def setUp(self):
+        self.src = _read()
+
+    def test_a_resync_query_exists_and_is_run_after_the_sweep(self):
+        self.assertIn("RESYNC_GAPS_AQL", self.src,
+                      "nothing repairs project_registry.open_gaps after a sweep")
+        resync = _block(self.src, "RESYNC_GAPS_AQL")
+        self.assertIn("project_registry", resync)
+        self.assertIn("open_gaps", resync)
+        # It must run on the write path, not merely be defined.
+        self.assertRegex(self.src, r"db\.aql\.execute\(RESYNC_GAPS_AQL")
+
+    def test_the_counter_is_recomputed_not_decremented(self):
+        """Subtracting the sweep size drifts further on a partial or repeated run;
+        recomputing from the alerts converges."""
+        resync = _block(self.src, "RESYNC_GAPS_AQL")
+        self.assertRegex(resync, r'a\.status == "open"',
+                         "open_gaps is not recomputed from the live open alerts")
+        self.assertIn("open_gaps: live", resync)
+        self.assertNotRegex(resync, r"open_gaps\s*-\s*",
+                            "decrementing drifts; recompute instead")
+
+    def test_project_ids_are_read_back_rather_than_parsed_from_keys(self):
+        """A _key is a sanitised project_id + req_id and a req_id can contain the
+        separator (live example: "arango-ontoextract_-6.5 VCR playback"), so splitting
+        the key to recover the project is a guess."""
+        self.assertNotRegex(self.src, r'rsplit\("_", 1\)\[0\] for k in updated',
+                            "project ids derived by splitting _key — unreliable")
+        self.assertIn("COLLECT project = a.project_id", self.src)
+
+
 if __name__ == "__main__":
     unittest.main()

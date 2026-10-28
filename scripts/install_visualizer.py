@@ -305,7 +305,8 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
     }
     return {
         "graphId": graph_id, "name": THEME_NAME,
-        "description": "Shared-memory graph. Alerts: red=OPEN, amber=undocumented, grey=closed. "
+        "description": "Shared-memory graph. Alerts: red=OPEN, amber=undocumented, "
+                       "grey=closed, dim grey=stale (aged out, not fixed). "
                        "Patches: amber=proposed, green=accepted. Observations: amber=unprocessed, "
                        "green=promoted, grey=acknowledged. Patterns: green=reused, "
                        "gold=high-importance. NOTE: on LARGE canvases a visualizer bug leaves "

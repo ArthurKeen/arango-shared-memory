@@ -166,12 +166,19 @@ SCHEMAS = {
                 # verify.py's open count and the visualizer's queries -- with no reader
                 # change at all. A later /prd-sync that re-detects the gap upserts
                 # status "open" again, which correctly revives it.
-                "status": {"enum": ["open", "closed", "stale", None]},
+                # "undocumented" predates this validator and is still live (census
+                # 2026-10-28: closed 181 / open 140 / stale 53 / undocumented 1). It was
+                # missed when "stale" was added -- the same omission, one round later,
+                # on a value this repo ships a theme rule for. Level "moderate" lets an
+                # already-invalid row be updated, which is why nothing has broken yet;
+                # a fresh write of it would hit the very ERR 1620 that added "stale".
+                "status": {"enum": ["open", "closed", "stale", "undocumented", None]},
             },
         },
         "level": "moderate",
         "message": "drift_alerts: needs project_id + req_id; "
-                   "classification MISSING|PARTIAL; status open|closed|stale",
+                   "classification MISSING|PARTIAL; "
+                   "status open|closed|stale|undocumented",
     },
     "prd_patches": {
         "rule": {
