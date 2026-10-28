@@ -248,13 +248,52 @@ class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
         self.assertNotRegex(resync, r"open_gaps\s*-\s*",
                             "decrementing drifts; recompute instead")
 
-    def test_project_ids_are_read_back_rather_than_parsed_from_keys(self):
+    def test_project_ids_are_never_parsed_out_of_a_key(self):
         """A _key is a sanitised project_id + req_id and a req_id can contain the
         separator (live example: "arango-ontoextract_-6.5 VCR playback"), so splitting
-        the key to recover the project is a guess."""
-        self.assertNotRegex(self.src, r'rsplit\("_", 1\)\[0\] for k in updated',
-                            "project ids derived by splitting _key — unreliable")
-        self.assertIn("COLLECT project = a.project_id", self.src)
+        the key to recover the project is a guess.
+
+        The previous version of this test was INERT: its assertIn was satisfied by
+        unrelated pre-existing queries and its assertNotRegex was pinned to a literal
+        that no longer existed, so it could not have failed on a regression. Pinned
+        now to the absence of key-splitting anywhere in the file.
+        """
+        for pattern in (r'\.split\("_"', r"\.split\('_'", r"rsplit\(\s*[\"']_"):
+            self.assertNotRegex(
+                self.src, pattern,
+                "a project id is being recovered by splitting a _key — unreliable; "
+                "read project_id back from the row instead")
+
+    def test_a_sweep_only_resyncs_the_projects_it_swept(self):
+        """Using the full drifted set meant --age-out rewrote open_gaps for projects
+        the dormancy gate had just PROTECTED and printed under "NOT ancient" — writes
+        outside the stated scope, absent from the dry run, and not covered by the
+        printed reversal. Repairing unrelated drift is --repair-gaps' job."""
+        self.assertIn("def resync_gaps(label, projects):", self.src,
+                      "resync_gaps chooses its own scope instead of being given one")
+        idx = self.src.index("aged out {len(updated)} alert(s)")
+        after = self.src[idx:idx + 1200]
+        self.assertIn("COLLECT project = a.project_id", after,
+                      "the sweep does not derive its resync set from the swept rows")
+        self.assertIn('resync_gaps("open_gaps", swept)', after)
+
+    def test_the_audit_line_pairs_by_project_not_by_position(self):
+        """RESYNC_GAPS_AQL has no SORT while DRIFTED_GAPS_AQL does, so zipping the two
+        result sets can print one project's name against another's previous count."""
+        self.assertNotRegex(self.src, r"zip\(written, rows\)",
+                            "resync audit output pairs two result sets positionally")
+        self.assertIn("by_project = {r[\"project\"]: r[\"open_gaps\"] for r in written}",
+                      self.src)
+
+    def test_the_age_out_rechecks_status_at_update_time(self):
+        """Selection and update are two round trips. A /prd-sync closing a gap in
+        between would otherwise flip a CLOSED alert to stale with prior_status
+        "closed" while it keeps closed_at, which phase3_lifecycle.py's TTL still
+        acts on."""
+        age_out = _block(self.src, "AGE_OUT_AQL")
+        self.assertRegex(age_out, r'FILTER a\.status == "open"',
+                         "AGE_OUT_AQL updates by _key without re-checking status — a "
+                         "concurrently closed alert would be swept")
 
 
 class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):

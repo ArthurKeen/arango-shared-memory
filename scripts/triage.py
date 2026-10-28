@@ -215,8 +215,14 @@ FOR a IN drift_alerts FILTER a.status == "open"
   SORT n DESC RETURN { project, n }
 """
 
+# The status re-check is not redundant with ANCIENT_AQL. Selection and update are two
+# round trips, and a /prd-sync closing a gap in between would otherwise flip a CLOSED
+# alert to stale with prior_status "closed" while it keeps closed_at -- which
+# phase3_lifecycle.py's TTL still acts on. Re-checking makes the pair safe to interleave
+# with a concurrent sync; a row that moved on is simply skipped and reported.
 AGE_OUT_AQL = """
 FOR a IN drift_alerts FILTER a._key IN @keys
+  FILTER a.status == "open"
   UPDATE a WITH { status: "stale", prior_status: a.status,
                   aged_out_at: @now, aged_out_by: @by,
                   aged_out_reason: @reason } IN drift_alerts
@@ -340,20 +346,28 @@ def main() -> int:
         """Projects whose open_gaps disagrees with the live count, honouring --project."""
         return list(db.aql.execute(DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT}))
 
-    def resync_gaps(label):
-        """Recompute open_gaps wherever it has drifted. No-op when nothing has."""
-        rows = drifted()
-        if not rows:
-            print(f"  {label}: open_gaps already matches the live counts; nothing to do.")
+    def resync_gaps(label, projects):
+        """Recompute open_gaps for exactly `projects`. No-op on an empty list.
+
+        The caller chooses the set, deliberately. A SWEEP may only touch what it swept:
+        using the full drifted set meant `--age-out` rewrote the registry for projects
+        the dormancy gate had just protected and printed under "NOT ancient", which the
+        dry run never mentions and the printed reversal cannot undo. Repairing
+        unrelated drift is what --repair-gaps is for, and it says so before it writes.
+        """
+        if not projects:
+            print(f"  {label}: nothing to recompute.")
             return
-        # --project scopes this too. Without it, `--project X --age-out` rewrote the
-        # registry for every drifted project -- shared writes outside the stated scope,
-        # which the printed reversal does not cover.
+        before = {r["project"]: r["recorded"] for r in drifted()}
         written = list(db.aql.execute(
-            RESYNC_GAPS_AQL, bind_vars={"projects": [r["project"] for r in rows]}))
-        print(f"  {label}: open_gaps recomputed for {len(written)} project(s): "
-              + ", ".join(f"{r['project']} {d['recorded']}->{r['open_gaps']}"
-                          for r, d in zip(written, rows)))
+            RESYNC_GAPS_AQL, bind_vars={"projects": sorted(projects)}))
+        # Keyed by project, never zipped: RESYNC_GAPS_AQL has no SORT while
+        # DRIFTED_GAPS_AQL does, so positional pairing can print one project's name
+        # against another's previous counter.
+        by_project = {r["project"]: r["open_gaps"] for r in written}
+        print(f"  {label}: open_gaps recomputed for {len(by_project)} project(s): "
+              + ", ".join(f"{p} {before.get(p, '?')}->{n}"
+                          for p, n in sorted(by_project.items())))
 
     if REPAIR_GAPS:
         if AGE_OUT:
@@ -374,7 +388,7 @@ def main() -> int:
             return 0
         print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
               "is modified.")
-        resync_gaps("--repair-gaps")
+        resync_gaps("--repair-gaps", [r["project"] for r in rows])
         return 0
 
     if not AGE_OUT:
@@ -413,12 +427,23 @@ def main() -> int:
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
+    if len(updated) != len(ancient):
+        print(f"    ({len(ancient) - len(updated)} row(s) were no longer open and were "
+              "skipped — a concurrent /prd-sync moved them on)")
 
-    # Keep the denormalized counter honest in the same breath. If this raises, the
-    # age-out above is already committed -- which is survivable precisely because
-    # --repair-gaps can run it again later from the stale rows.
+    # Keep the denormalized counter honest in the same breath, for the swept projects
+    # ONLY. Read the project ids back from the rows rather than splitting the _key: a
+    # key is a sanitised project_id + req_id and a req_id can contain the separator
+    # (live example: "arango-ontoextract_-6.5 VCR playback").
+    #
+    # If this raises, the age-out above is already committed -- survivable precisely
+    # because --repair-gaps recomputes from the drift later.
     try:
-        resync_gaps("open_gaps")
+        swept = [r["project"] for r in db.aql.execute(
+            "FOR a IN drift_alerts FILTER a._key IN @keys "
+            "COLLECT project = a.project_id RETURN { project }",
+            bind_vars={"keys": updated})]
+        resync_gaps("open_gaps", swept)
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(
             f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
