@@ -375,9 +375,17 @@ def main() -> int:
         by_status = {r["s"]: r["n"] for r in db.aql.execute(
             "FOR d IN drift_alerts COLLECT s = d.status WITH COUNT INTO n RETURN {s, n}")}
         total = sum(by_status.values())
-        shown = " / ".join(f"{n} {s}" for s, n in sorted(
-            by_status.items(), key=lambda kv: -kv[1]))
-        print(f"  drift_alerts:      {shown}  ({total} total)")
+        # The expected states are always printed, including at zero: a missing "0 open"
+        # is indistinguishable from the count having stopped being reported, which is
+        # the failure this whole line exists to prevent. Anything else present in the
+        # data is appended, so an unexpected value surfaces rather than hiding. A null
+        # status is legal under the schema and would otherwise print as "None".
+        expected = ("open", "closed", "stale", "undocumented")
+        parts = [f"{by_status.get(s, 0)} {s}" for s in expected]
+        parts += [f"{n} {s if s is not None else '(no status)'}"
+                  for s, n in sorted(by_status.items(), key=lambda kv: -kv[1])
+                  if s not in expected]
+        print(f"  drift_alerts:      {' / '.join(parts)}  ({total} total)")
     if db.has_collection("prd_patches"):
         by_state = list(db.aql.execute(
             "FOR p IN prd_patches COLLECT s = p.review_state WITH COUNT INTO n RETURN {s, n}"))

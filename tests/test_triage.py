@@ -256,5 +256,82 @@ class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
         self.assertIn("COLLECT project = a.project_id", self.src)
 
 
+class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
+    """A sweep makes TWO mutations, so both must be undoable and both repairable.
+
+    Three defects from the second review of #8:
+
+      - the printed REVERSAL undid only the alerts, while the docstring promised it
+        reversed "the whole batch". Running it restored 53 rows to open and left 8
+        projects at open_gaps 0, permanently.
+      - a missed or failed resync could never be repaired. main() returned early when
+        nothing was ancient, and swept rows are "stale" while ANCIENT_AQL selects only
+        "open", so they could never be reselected. Not hypothetical: the 2026-10-23
+        production sweep ran before the resync existed, leaving 8 registry rows wrong
+        with no path back.
+      - verify.py dropped zero-count statuses, so "0 open" was indistinguishable from
+        the count no longer being reported.
+    """
+
+    def setUp(self):
+        self.src = _read()
+
+    def test_a_standalone_repair_path_exists(self):
+        self.assertIn('REPAIR_GAPS = "--repair-gaps" in sys.argv', self.src,
+                      "no way to repair a sweep whose counter resync was missed")
+        self.assertIn("if REPAIR_GAPS:", self.src)
+
+    def test_the_repair_set_comes_from_stale_rows_not_this_run(self):
+        """Driving it from rows swept in THIS run is what made earlier sweeps
+        unrepairable."""
+        self.assertIn("STALE_PROJECTS_AQL", self.src)
+        stale = _block(self.src, "STALE_PROJECTS_AQL")
+        self.assertRegex(stale, r'a\.status == "stale"',
+                         "the repair set is not derived from the stale alerts")
+        self.assertIn("db.aql.execute(STALE_PROJECTS_AQL)", self.src)
+
+    def test_repair_gaps_also_requires_explicit_confirmation(self):
+        """It writes to shared data, so it gets the same gate as --age-out."""
+        idx = self.src.index("if REPAIR_GAPS:")
+        branch = self.src[idx:idx + 900]
+        self.assertIn("if not CONFIRMED:", branch)
+        self.assertIn("DRY RUN", branch)
+
+    def test_the_printed_reversal_names_both_mutations(self):
+        """One query restores the alerts; the counter needs the repair pass after it.
+        Printing only the first is what made the promise false."""
+        self.assertIn("the sweep makes two mutations", self.src)
+        self.assertIn("triage.py --repair-gaps --yes", self.src)
+
+    def test_a_failed_resync_tells_the_operator_how_to_finish(self):
+        """The age-out is already committed by then, so silence would strand it."""
+        self.assertRegex(self.src, r"warning: alerts were aged out but open_gaps was NOT")
+        self.assertIn("run: triage.py --repair-gaps --yes", self.src)
+
+    def test_nothing_to_age_out_still_points_at_the_repair(self):
+        """Once everything old is swept, this is the only reachable branch — if it
+        says nothing, a wrong counter stays wrong forever."""
+        idx = self.src.index("nothing older than the threshold")
+        self.assertIn("--repair-gaps --yes", self.src[idx:idx + 600])
+
+
+class TestVerifyReportsEveryAlertStatus(unittest.TestCase):
+    def setUp(self):
+        with open(os.path.join(REPO, "scripts", "verify.py"), encoding="utf-8") as fh:
+            self.src = fh.read()
+
+    def test_expected_statuses_are_printed_even_at_zero(self):
+        self.assertIn('expected = ("open", "closed", "stale", "undocumented")', self.src,
+                      "verify.py does not pin the statuses it always reports")
+        self.assertIn("by_status.get(s, 0)", self.src,
+                      "a zero-count status would vanish from the line")
+
+    def test_an_unexpected_or_null_status_is_still_surfaced(self):
+        self.assertIn("'(no status)'", self.src,
+                      "a null status would print as None")
+        self.assertIn("if s not in expected", self.src,
+                      "a status outside the expected set would be hidden")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,10 @@ ancient open alerts to status 'stale' — NOT deleted, NOT closed. A close asser
 the gap was fixed, which nobody has verified; 'stale' asserts only that nobody has
 looked in a long time, which is true and provable from the timestamps. Every aged
 row records aged_out_at / aged_out_reason / aged_out_by and keeps its original
-status in prior_status, so one AQL UPDATE reverses the whole batch.
+status in prior_status, so the printed UPDATE restores every alert. That UPDATE
+undoes the ALERTS; because the sweep also recomputes the denormalized
+project_registry.open_gaps, a complete undo is that query plus a following
+`--repair-gaps --yes`. Both are printed together when the sweep runs.
 
 Writes touch shared prod data that four people now read, so --age-out additionally
 requires --yes and prints the exact reversal query before it runs.
@@ -57,7 +60,10 @@ Options:
     --stale-days N   age threshold for 'ancient' (default 60)
     --project P      restrict the report to one project
     --age-out        propose the stale transition (still a dry run without --yes)
-    --yes            actually write the stale transition
+    --repair-gaps    recompute project_registry.open_gaps for every project holding a
+                     stale alert, and nothing else. Idempotent. Use it after reversing
+                     a sweep, or to repair one whose resync was missed.
+    --yes            actually write (required by --age-out and --repair-gaps)
 Exit: 0 ok · 1 failure/misconfiguration · 2 python-arango missing.
 """
 
@@ -93,6 +99,7 @@ STALE_DAYS = int(_arg("--stale-days", "60"))
 ONLY_PROJECT = _arg("--project")
 AGE_OUT = "--age-out" in sys.argv
 CONFIRMED = "--yes" in sys.argv
+REPAIR_GAPS = "--repair-gaps" in sys.argv
 
 
 # ---------------------------------------------------------------- connection
@@ -220,6 +227,19 @@ FOR a IN drift_alerts FILTER a._key IN @keys
 # by verify.py and by the visualizer's "open_gaps >= 1" orange rule, so a swept project
 # would keep flashing a gap count it no longer has. Recomputed from the alerts rather
 # than decremented, so a partial or repeated run converges instead of drifting further.
+# Every project holding a stale alert -- not just the rows swept in THIS run. A sweep
+# whose resync was missed or failed can otherwise never be repaired: swept rows are
+# "stale", and ANCIENT_AQL only selects status "open", so they can never be reselected.
+# That is not hypothetical -- the 2026-10-23 production sweep of 53 rows ran before the
+# resync existed, leaving 8 registry rows wrong with no path back. Deriving the set from
+# the stale rows themselves makes `--repair-gaps` able to fix any past sweep, and makes
+# a repeated run a no-op rather than a drift.
+STALE_PROJECTS_AQL = """
+FOR a IN drift_alerts FILTER a.status == "stale"
+  COLLECT project = a.project_id
+  RETURN project
+"""
+
 RESYNC_GAPS_AQL = """
 FOR p IN @projects
   LET live = LENGTH(FOR a IN drift_alerts
@@ -229,6 +249,10 @@ FOR p IN @projects
     RETURN { project: p, open_gaps: live }
 """
 
+# NOTE: this reverses the ALERTS only. --age-out makes two mutations (status, and the
+# denormalized project_registry.open_gaps), so a full undo is this query followed by
+# `triage.py --repair-gaps --yes`, which recomputes the counter from whatever the
+# alerts then say. Printed together for exactly that reason.
 REVERSAL = ("FOR a IN drift_alerts FILTER a.aged_out_at == \"{now}\" "
             "UPDATE a WITH {{ status: a.prior_status, aged_out_at: null, "
             "aged_out_by: null, aged_out_reason: null, prior_status: null }} "
@@ -301,6 +325,32 @@ def main() -> int:
         if len(revived) > 8:
             print(f"        … {len(revived) - 8} more project(s)")
 
+    def resync_gaps(label):
+        """Recompute open_gaps for every project holding a stale alert.
+
+        Driven by the stale rows, not by what this run swept, so it repairs earlier
+        sweeps too and is a no-op when there is nothing to fix.
+        """
+        projects = sorted(db.aql.execute(STALE_PROJECTS_AQL))
+        if not projects:
+            print(f"  {label}: no project holds a stale alert; nothing to recompute.")
+            return
+        rows = list(db.aql.execute(RESYNC_GAPS_AQL, bind_vars={"projects": projects}))
+        print(f"  {label}: open_gaps recomputed for {len(rows)} project(s): "
+              + ", ".join(f"{r['project']}={r['open_gaps']}" for r in rows))
+
+    if REPAIR_GAPS:
+        if not CONFIRMED:
+            projects = sorted(db.aql.execute(STALE_PROJECTS_AQL))
+            print(f"\n  --repair-gaps: DRY RUN — would recompute open_gaps for "
+                  f"{len(projects)} project(s): {', '.join(projects) or '(none)'}")
+            print("    Add --yes to commit.")
+            return 0
+        print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
+              "is modified.")
+        resync_gaps("--repair-gaps")
+        return 0
+
     if not AGE_OUT:
         print("\n  Nothing was written. To cap the alert queue on purpose, re-run with "
               "--age-out (and --yes to commit).")
@@ -308,6 +358,14 @@ def main() -> int:
 
     if not ancient:
         print("\n  --age-out: nothing older than the threshold. Nothing to do.")
+        # Still offer the repair: a previous sweep may have left the counter wrong,
+        # and with nothing left to age out this branch would otherwise be the only
+        # one reachable and would do nothing forever.
+        stale_projects = sorted(db.aql.execute(STALE_PROJECTS_AQL))
+        if stale_projects:
+            print(f"    {len(stale_projects)} project(s) hold stale alerts. If a "
+                  "previous sweep's\n    counter repair was missed, run: "
+                  "triage.py --repair-gaps --yes")
         return 0
 
     reason = f"no review in {STALE_DAYS}+ days; aged out by scripts/triage.py"
@@ -324,24 +382,23 @@ def main() -> int:
         return 0
 
     now = now_iso()
-    print(f"\n  REVERSAL (copy this before continuing):\n    {REVERSAL.format(now=now)}\n")
+    print("\n  REVERSAL (copy BOTH before continuing — the sweep makes two mutations):")
+    print(f"    1. {REVERSAL.format(now=now)}")
+    print("    2. triage.py --repair-gaps --yes   (recomputes open_gaps afterwards)\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
 
-    # Keep the denormalized counter honest in the same breath, or the sweep leaves
-    # every swept project advertising gaps it no longer has (see RESYNC_GAPS_AQL).
-    # Read the project ids back from the rows themselves. Deriving them by splitting
-    # the _key would be a guess: the key is a SANITISED project_id + req_id, and a
-    # req_id can contain the separator (there are live keys like
-    # "arango-ontoextract_-6.5 VCR playback").
-    projects = sorted(r["project"] for r in db.aql.execute(
-        "FOR a IN drift_alerts FILTER a._key IN @keys "
-        "COLLECT project = a.project_id RETURN { project }",
-        bind_vars={"keys": updated}))
-    resynced = list(db.aql.execute(RESYNC_GAPS_AQL, bind_vars={"projects": projects}))
-    print(f"  resynced open_gaps for {len(resynced)} project(s): "
-          + ", ".join(f"{r['project']}={r['open_gaps']}" for r in resynced))
+    # Keep the denormalized counter honest in the same breath. If this raises, the
+    # age-out above is already committed -- which is survivable precisely because
+    # --repair-gaps can run it again later from the stale rows.
+    try:
+        resync_gaps("open_gaps")
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(
+            f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
+            "run: triage.py --repair-gaps --yes\n")
+        return 1
     return 0
 
 
