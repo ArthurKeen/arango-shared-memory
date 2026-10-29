@@ -403,6 +403,37 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
             "the printed undo still tells the operator to re-run the CLI, which is "
             "how --project and --stale-days got dropped")
 
+    def test_a_re_sweep_clears_the_previous_reversal_marker(self):
+        """Otherwise a second undo silently reverts nothing.
+
+        Step 1 stamps reverted_at and deliberately leaves aged_out_at. A row swept,
+        reverted, then swept again would still carry reverted_at, so the freshly
+        printed undo -- which filters `reverted_at == null` -- matches zero rows,
+        reports no error, and step 2 then writes open_gaps to agree with the un-undone
+        state. A mixed batch is reverted silently and partially.
+        """
+        age_out = _block(self.src, "AGE_OUT_AQL")
+        self.assertRegex(age_out, r"reverted_at:\s*null",
+                         "AGE_OUT_AQL does not clear a previous reverted_at, so the "
+                         "printed undo for the new batch would match nothing")
+
+    def test_the_undo_does_not_overwrite_a_revived_project_s_counter(self):
+        """The dormancy gate applies to the undo too, evaluated when it RUNS.
+
+        The undo may be pasted long after the sweep. If /prd-sync revived a swept
+        project in between -- the revival path this script explicitly supports -- that
+        project has an audit-derived open_gaps, and overwriting it with the live
+        open-alert count substitutes the other definition. --repair-gaps could not
+        correct it afterwards, because the project is no longer dormant.
+        """
+        stmt = re.search(r"REVERSAL_GAPS = \((.*?)\)\n", self.src, re.DOTALL).group(1)
+        self.assertIn("last_sync", stmt,
+                      "REVERSAL_GAPS ignores whether the project has revived")
+        self.assertIn("FILTER p IN dormant", stmt)
+        self.assertIn("DATE_SUBTRACT(DATE_NOW()", stmt,
+                      "the cutoff is baked at print time rather than evaluated when "
+                      "the statement runs")
+
     def test_the_reversal_preserves_the_batch_marker(self):
         """Step 2 finds the batch by aged_out_at, so step 1 must not clear it."""
         stmt = re.search(r"REVERSAL_ALERTS = \((.*?)\)\n", self.src, re.DOTALL).group(1)
@@ -422,7 +453,7 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         # Points at the BATCH-SCOPED statement, not the CLI: --repair-gaps re-derives
         # its set from flags and the dormancy cutoff, so it can select nothing for
         # exactly the rows the failed run just swept.
-        self.assertIn("REVERSAL_GAPS.format(now=now)", after,
+        self.assertIn("REVERSAL_GAPS.format(now=now, days=STALE_DAYS)", after,
                       "the failure hint sends the operator back to the CLI, which may "
                       "not select the rows this run swept")
         self.assertIn("scoped to this batch", after)
@@ -476,6 +507,11 @@ class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
         self.assertIn("none compared", self.src,
                       "an empty --repair-gaps result cannot distinguish 'no drift' "
                       "from 'nothing was eligible to compare'")
+        # Both DRIFTED_GAPS_AQL and the active-project probe iterate project_registry,
+        # so a project with alerts but no registry row is compared by neither.
+        self.assertIn("no project_registry row", self.src,
+                      "a project with alerts but no registry row still falls through "
+                      "to the 'all clean' message")
 
     def test_the_sweep_dry_run_names_the_registry_writes(self):
         """Listing only alert keys made the second mutation invisible until after it

@@ -227,7 +227,15 @@ FOR a IN drift_alerts FILTER a._key IN @keys
   FILTER a.status == "open"
   UPDATE a WITH { status: "stale", prior_status: a.status,
                   aged_out_at: @now, aged_out_by: @by,
-                  aged_out_reason: @reason } IN drift_alerts
+                  aged_out_reason: @reason,
+                  // Clear any PREVIOUS reversal marker. Step 1 of the undo stamps
+                  // reverted_at and leaves aged_out_at in place, so a row swept,
+                  // reverted, then swept again would still carry reverted_at -- and
+                  // the freshly printed undo (which filters reverted_at == null) would
+                  // match zero rows, report nothing, and leave step 2 writing
+                  // open_gaps to agree with the un-undone state. A mixed batch would
+                  // be reverted silently and partially.
+                  reverted_at: null } IN drift_alerts
   RETURN NEW._key
 """
 
@@ -301,10 +309,21 @@ REVERSAL_ALERTS = (
     'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
     'IN drift_alerts')
 
+# The dormancy gate applies here too, and is evaluated when the statement RUNS, not
+# when it is printed -- DATE_SUBTRACT, not a baked timestamp. The undo may be pasted
+# long after the sweep, and if /prd-sync revived a swept project in between (the
+# revival path this script explicitly supports), that project now has an
+# audit-derived open_gaps. Overwriting it with the live open-alert count would
+# substitute the other definition, and --repair-gaps could not correct it afterwards
+# because the project is no longer dormant.
 REVERSAL_GAPS = (
+    'LET cutoff = DATE_SUBTRACT(DATE_NOW(), {days}, "day") '
+    'LET dormant = (FOR r IN project_registry '
+    'FILTER r.last_sync == null OR LEFT(r.last_sync, 10) < LEFT(cutoff, 10) '
+    'RETURN r.project_id) '
     'LET touched = (FOR a IN drift_alerts FILTER a.aged_out_at == "{now}" '
     'COLLECT p = a.project_id RETURN p) '
-    'FOR p IN touched '
+    'FOR p IN touched FILTER p IN dormant '
     'LET live = LENGTH(FOR a IN drift_alerts '
     'FILTER a.project_id == p AND a.status == "open" RETURN 1) '
     'FOR r IN project_registry FILTER r.project_id == p '
@@ -431,10 +450,25 @@ def main() -> int:
                     "LEFT(r.last_sync, 10) >= LEFT(@cutoff, 10) "
                     "RETURN r.project_id",
                     bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+                # Both DRIFTED_GAPS_AQL and the probe above iterate project_registry,
+                # so a project with alerts but NO registry row is compared by neither
+                # and would otherwise fall through to "all clean".
+                unregistered = list(db.aql.execute(
+                    "LET known = (FOR r IN project_registry RETURN r.project_id) "
+                    "FOR a IN drift_alerts "
+                    "FILTER @proj == '' OR a.project_id == @proj "
+                    "FILTER a.project_id NOT IN known "
+                    "COLLECT p = a.project_id RETURN p",
+                    bind_vars={"proj": ONLY_PROJECT}))
                 if active:
                     print(f"    (none compared — {len(active)} project(s) in scope have "
                           f"synced within {STALE_DAYS}d, so /prd-sync owns their "
                           "counter:\n     " + ", ".join(sorted(active)) + ")")
+                elif unregistered:
+                    print(f"    (none compared — {len(unregistered)} project(s) in "
+                          "scope have alerts but no project_registry row, so there is "
+                          "no counter to\n     repair: "
+                          + ", ".join(sorted(unregistered)) + ")")
                 else:
                     print("    (none — the counter matches the alerts everywhere)")
             print("    Add --yes to commit.")
@@ -487,7 +521,7 @@ def main() -> int:
     now = now_iso()
     print("\n  REVERSAL (copy BOTH — the sweep makes two mutations; run in order):")
     print(f"    1. {REVERSAL_ALERTS.format(now=now)}")
-    print(f"    2. {REVERSAL_GAPS.format(now=now)}")
+    print(f"    2. {REVERSAL_GAPS.format(now=now, days=STALE_DAYS)}")
     print("    Both are scoped to this batch by aged_out_at, so they need no flags "
           "and\n    cannot touch anything this run did not change.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
@@ -517,7 +551,7 @@ def main() -> int:
         sys.stderr.write(
             f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
             "run this to finish (scoped to this batch):\n  "
-            + REVERSAL_GAPS.format(now=now) + "\n")
+            + REVERSAL_GAPS.format(now=now, days=STALE_DAYS) + "\n")
         return 1
     return 0
 
