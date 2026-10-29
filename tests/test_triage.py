@@ -100,10 +100,17 @@ class TestTriageAgeOutSafety(unittest.TestCase):
         self.assertIn("prior_status", age_out, "the transition is not reversible")
 
     def test_a_reversal_query_exists_and_is_printed_before_writing(self):
-        self.assertIn("REVERSAL", self.src)
-        reversal = re.search(r'REVERSAL = \((.*?)\)\n', self.src, re.DOTALL)
-        self.assertTrue(reversal, "no REVERSAL query")
-        self.assertIn("prior_status", reversal.group(1))
+        """Both halves of the undo, printed before anything is written."""
+        for name in ("REVERSAL_ALERTS", "REVERSAL_GAPS"):
+            self.assertIn(name, self.src, f"no {name} query")
+        alerts = re.search(r"REVERSAL_ALERTS = \((.*?)\)\n", self.src, re.DOTALL)
+        self.assertTrue(alerts, "REVERSAL_ALERTS not found")
+        self.assertIn("prior_status", alerts.group(1))
+        # Printed BEFORE the age-out executes, not after.
+        printed = self.src.index("REVERSAL (copy BOTH")
+        written = self.src.index("db.aql.execute(AGE_OUT_AQL")
+        self.assertLess(printed, written,
+                        "the reversal is printed after the write it reverses")
 
 
 class TestTriageRespectsTheCollectionSchema(unittest.TestCase):
@@ -344,7 +351,18 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         drift = _block(self.src, "DRIFTED_GAPS_AQL")
         self.assertRegex(drift, r'@proj == "" OR r\.project_id == @proj',
                          "DRIFTED_GAPS_AQL ignores --project")
-        self.assertIn('bind_vars={"proj": ONLY_PROJECT}', self.src)
+        # Pinned to drifted()'s OWN call. The previous assertion looked for
+        # 'bind_vars={"proj": ONLY_PROJECT}' anywhere in the file, which the
+        # pre-existing CONTRADICTED_AQL and ORPHANED_AQL calls already satisfy -- so it
+        # could not have failed if drifted() stopped passing the scope. Second time
+        # this file has shipped a test that could not fail; hence the mutation checks.
+        idx = self.src.index("def drifted():")
+        body = self.src[idx:idx + 400]
+        self.assertIn("DRIFTED_GAPS_AQL", body)
+        self.assertIn("ONLY_PROJECT", body,
+                      "drifted() does not pass --project to its own query")
+        self.assertIn("cutoff", body,
+                      "drifted() does not pass the dormancy cutoff")
 
     def test_repair_gaps_refuses_to_mask_an_age_out(self):
         """The repair branch returns first, so the combination printed the sweep
@@ -362,11 +380,37 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         self.assertIn("if not CONFIRMED:", branch)
         self.assertIn("DRY RUN", branch)
 
-    def test_the_printed_reversal_names_both_mutations(self):
-        """One query restores the alerts; the counter needs the repair pass after it.
-        Printing only the first is what made the promise false."""
-        self.assertIn("the sweep makes two mutations", self.src)
-        self.assertIn("triage.py --repair-gaps --yes", self.src)
+    def test_the_printed_undo_is_two_self_contained_batch_scoped_queries(self):
+        """Not "re-run the CLI with the right flags".
+
+        The flag-based step 2 kept growing holes: it dropped --project (rewriting
+        counters fleet-wide after a scoped sweep), then dropped --stale-days (a project
+        swept under a 30-day threshold is not dormant under the default 60, so the
+        repair selected nothing and left the counter at 0 forever), and it touched
+        dormant projects that were never swept. All one defect -- the undo had to
+        re-derive the batch from flags instead of knowing it. Keying both statements on
+        aged_out_at removes the class.
+        """
+        self.assertIn("REVERSAL_ALERTS", self.src)
+        self.assertIn("REVERSAL_GAPS", self.src)
+        for name in ("REVERSAL_ALERTS", "REVERSAL_GAPS"):
+            stmt = re.search(rf"{name} = \((.*?)\)\n", self.src, re.DOTALL)
+            self.assertTrue(stmt, f"{name} not found")
+            self.assertIn("aged_out_at", stmt.group(1),
+                          f"{name} is not scoped to the batch")
+        self.assertNotRegex(
+            self.src, r"\d\. triage\.py --repair-gaps",
+            "the printed undo still tells the operator to re-run the CLI, which is "
+            "how --project and --stale-days got dropped")
+
+    def test_the_reversal_preserves_the_batch_marker(self):
+        """Step 2 finds the batch by aged_out_at, so step 1 must not clear it."""
+        stmt = re.search(r"REVERSAL_ALERTS = \((.*?)\)\n", self.src, re.DOTALL).group(1)
+        self.assertNotRegex(stmt, r"aged_out_at:\s*null",
+                            "step 1 clears aged_out_at, so step 2 can never find the "
+                            "projects it must repair")
+        self.assertIn("reverted_at", stmt,
+                      "a reversal leaves no trace that it happened")
 
     def test_a_failed_resync_tells_the_operator_how_to_finish(self):
         """The age-out is already committed by then, so silence would strand it."""
@@ -375,8 +419,13 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         # was scoped, so assert on the pieces rather than a contiguous string.
         idx = self.src.index("warning: alerts were aged out")
         after = self.src[idx:idx + 400]
-        self.assertIn("run: triage.py --repair-gaps", after)
-        self.assertIn('" --yes', after)
+        # Points at the BATCH-SCOPED statement, not the CLI: --repair-gaps re-derives
+        # its set from flags and the dormancy cutoff, so it can select nothing for
+        # exactly the rows the failed run just swept.
+        self.assertIn("REVERSAL_GAPS.format(now=now)", after,
+                      "the failure hint sends the operator back to the CLI, which may "
+                      "not select the rows this run swept")
+        self.assertIn("scoped to this batch", after)
 
     def test_nothing_to_age_out_still_points_at_the_repair(self):
         """Once everything old is swept, this is the only reachable branch — if it
@@ -412,16 +461,21 @@ class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
         self.assertRegex(drift, r"r\.project_id IN dormant",
                          "DRIFTED_GAPS_AQL does not restrict to the dormant set")
 
-    def test_the_printed_follow_up_carries_the_sweep_s_scope(self):
-        """After a --project sweep, an unscoped `--repair-gaps --yes` rewrites
-        open_gaps fleet-wide -- so the documented undo would itself make
-        out-of-scope writes."""
-        self.assertIn('f" --project {ONLY_PROJECT}" if ONLY_PROJECT', self.src,
-                      "the printed --repair-gaps follow-up drops --project")
-        self.assertGreaterEqual(
-            self.src.count("--project {ONLY_PROJECT}"), 3,
-            "not every printed --repair-gaps hint carries the scope (reversal, the "
-            "nothing-to-sweep branch, and the failure warning)")
+    def test_every_printed_cli_hint_carries_every_selecting_flag(self):
+        """--repair-gaps re-derives its set from --project AND the --stale-days
+        dormancy cutoff, so a hint that omits either points at a command that selects
+        a different set than the one the operator is looking at."""
+        for frag in ("--project {ONLY_PROJECT}", "--stale-days {STALE_DAYS}"):
+            self.assertIn(frag, self.src,
+                          f"a printed --repair-gaps hint omits {frag}")
+
+    def test_no_drift_is_not_reported_when_nothing_was_compared(self):
+        """"The counter matches everywhere" and "the dormancy gate excluded everything
+        in scope" are different answers; reporting the second as the first claims a
+        consistency that was never checked."""
+        self.assertIn("none compared", self.src,
+                      "an empty --repair-gaps result cannot distinguish 'no drift' "
+                      "from 'nothing was eligible to compare'")
 
     def test_the_sweep_dry_run_names_the_registry_writes(self):
         """Listing only alert keys made the second mutation invisible until after it

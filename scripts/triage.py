@@ -45,10 +45,12 @@ ancient open alerts to status 'stale' — NOT deleted, NOT closed. A close asser
 the gap was fixed, which nobody has verified; 'stale' asserts only that nobody has
 looked in a long time, which is true and provable from the timestamps. Every aged
 row records aged_out_at / aged_out_reason / aged_out_by and keeps its original
-status in prior_status, so the printed UPDATE restores every alert. That UPDATE
-undoes the ALERTS; because the sweep also recomputes the denormalized
-project_registry.open_gaps, a complete undo is that query plus a following
-`--repair-gaps --yes`. Both are printed together when the sweep runs.
+status in prior_status. The sweep makes TWO mutations -- the alert status and the
+denormalized project_registry.open_gaps -- so the undo is two queries, both printed
+before anything is written. Both are SELF-CONTAINED and keyed on this batch's
+aged_out_at, so they need no flags, cannot miss a project and cannot touch one the
+run did not change. (Step 1 leaves aged_out_at in place and stamps reverted_at,
+which is what lets step 2 still identify the batch.)
 
 Writes touch shared prod data that four people now read, so --age-out additionally
 requires --yes and prints the exact reversal query before it runs.
@@ -281,14 +283,34 @@ FOR p IN @projects
     RETURN { project: p, open_gaps: live }
 """
 
-# NOTE: this reverses the ALERTS only. --age-out makes two mutations (status, and the
-# denormalized project_registry.open_gaps), so a full undo is this query followed by
-# `triage.py --repair-gaps --yes`, which recomputes the counter from whatever the
-# alerts then say. Printed together for exactly that reason.
-REVERSAL = ("FOR a IN drift_alerts FILTER a.aged_out_at == \"{now}\" "
-            "UPDATE a WITH {{ status: a.prior_status, aged_out_at: null, "
-            "aged_out_by: null, aged_out_reason: null, prior_status: null }} "
-            "IN drift_alerts")
+# The undo is two SELF-CONTAINED queries, deliberately not "run the CLI again with the
+# right flags". The flag-based version kept growing holes: step 2 was an unscoped
+# --repair-gaps, so it dropped --project (rewriting counters fleet-wide after a scoped
+# sweep), then dropped --stale-days (a project swept under a 30-day threshold is not
+# dormant under the default 60, so the repair silently selected nothing and left the
+# counter at 0 forever), and it touched dormant projects that were never swept at all.
+# Every one of those was the same defect: the undo had to re-derive the batch from
+# flags instead of knowing it.
+#
+# Keying both statements on aged_out_at removes the class. The batch identifies itself,
+# no flag can be forgotten, and nothing outside it is touched. Step 1 therefore does NOT
+# clear aged_out_at -- it stamps reverted_at and leaves the trail, which is what lets
+# step 2 still find the projects (and is better provenance anyway).
+REVERSAL_ALERTS = (
+    'FOR a IN drift_alerts FILTER a.aged_out_at == "{now}" AND a.reverted_at == null '
+    'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
+    'IN drift_alerts')
+
+REVERSAL_GAPS = (
+    'LET touched = (FOR a IN drift_alerts FILTER a.aged_out_at == "{now}" '
+    'COLLECT p = a.project_id RETURN p) '
+    'FOR p IN touched '
+    'LET live = LENGTH(FOR a IN drift_alerts '
+    'FILTER a.project_id == p AND a.status == "open" RETURN 1) '
+    'FOR r IN project_registry FILTER r.project_id == p '
+    'UPDATE r WITH {{ open_gaps: live }} IN project_registry '
+    'RETURN {{ project: p, open_gaps: live }}')
+
 
 
 def _table(title, rows, total_label):
@@ -399,7 +421,22 @@ def main() -> int:
             for r in rows:
                 print(f"    {r['project']}: recorded {r['recorded']} -> live {r['live']}")
             if not rows:
-                print("    (none — the counter matches the alerts everywhere)")
+                # "No drift" and "excluded because the project still syncs" are
+                # different answers, and reporting the second as the first claims a
+                # consistency that was never checked.
+                active = list(db.aql.execute(
+                    "FOR r IN project_registry "
+                    "FILTER @proj == '' OR r.project_id == @proj "
+                    "FILTER r.last_sync != null AND "
+                    "LEFT(r.last_sync, 10) >= LEFT(@cutoff, 10) "
+                    "RETURN r.project_id",
+                    bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+                if active:
+                    print(f"    (none compared — {len(active)} project(s) in scope have "
+                          f"synced within {STALE_DAYS}d, so /prd-sync owns their "
+                          "counter:\n     " + ", ".join(sorted(active)) + ")")
+                else:
+                    print("    (none — the counter matches the alerts everywhere)")
             print("    Add --yes to commit.")
             return 0
         print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
@@ -421,7 +458,9 @@ def main() -> int:
         if drift_rows:
             print(f"    But {len(drift_rows)} project(s) have a drifted open_gaps "
                   "counter.\n    Run: triage.py --repair-gaps"
-                  + (f" --project {ONLY_PROJECT}" if ONLY_PROJECT else "") + " --yes")
+                  + (f" --project {ONLY_PROJECT}" if ONLY_PROJECT else "")
+                  + (f" --stale-days {STALE_DAYS}" if STALE_DAYS != 60 else "")
+                  + " --yes")
         return 0
 
     reason = f"no review in {STALE_DAYS}+ days; aged out by scripts/triage.py"
@@ -446,11 +485,11 @@ def main() -> int:
         return 0
 
     now = now_iso()
-    print("\n  REVERSAL (copy BOTH before continuing — the sweep makes two mutations):")
-    print(f"    1. {REVERSAL.format(now=now)}")
-    scope = f" --project {ONLY_PROJECT}" if ONLY_PROJECT else ""
-    print(f"    2. triage.py --repair-gaps{scope} --yes   (recomputes open_gaps "
-          "afterwards)\n")
+    print("\n  REVERSAL (copy BOTH — the sweep makes two mutations; run in order):")
+    print(f"    1. {REVERSAL_ALERTS.format(now=now)}")
+    print(f"    2. {REVERSAL_GAPS.format(now=now)}")
+    print("    Both are scoped to this batch by aged_out_at, so they need no flags "
+          "and\n    cannot touch anything this run did not change.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
@@ -472,10 +511,13 @@ def main() -> int:
             bind_vars={"keys": updated})]
         resync_gaps("open_gaps", swept)
     except Exception as exc:  # noqa: BLE001
+        # Point at the batch-scoped statement, not the CLI: --repair-gaps re-derives
+        # its set from flags and the dormancy cutoff, so it can silently select
+        # nothing for exactly the rows this run just swept.
         sys.stderr.write(
             f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
-            "run: triage.py --repair-gaps"
-            + (f" --project {ONLY_PROJECT}" if ONLY_PROJECT else "") + " --yes\n")
+            "run this to finish (scoped to this batch):\n  "
+            + REVERSAL_GAPS.format(now=now) + "\n")
         return 1
     return 0
 
