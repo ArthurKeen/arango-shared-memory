@@ -126,7 +126,7 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
 ```json
 {
   "command": "bash",
-  "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/python main.py"],
+  "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/arangodb-mcp"],
   "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
   "env": {
     "ARANGO_HOSTS": "https://<shared-cluster-host>:8529",
@@ -142,16 +142,16 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
 - Values above are for **joining the shared cluster** (the common case). For a **new local backend**
   instead, use `"ARANGO_HOSTS": "http://localhost:8539"`, `root` / `openSesame`, and omit `ARANGO_VERIFY_SSL`.
 - `OPENAI_API_KEY` enables hybrid/graph. Omit it to run keyword-only. **Never commit this file / key.**
-- This launch line matches the server's `main` branch: Poetry with `package-mode = false` and
-  `main.py` at the repo root. Its `pyproject.toml` declares an `arangodb-mcp` script, but with
-  `package-mode = false` Poetry never installs the project, so that command is never created.
-  Launch `main.py` with the venv's Python instead. The `bash -c` wrapper avoids depending on
-  `poetry` being on the launcher's PATH.
+- This launch line matches the server's `main` branch (v2.0.0+): the server is an installable
+  `src/arangodb_mcp` package, and `poetry install` creates the `arangodb-mcp` entry point
+  (`[project.scripts]`) in `.venv/bin/`. v2.0.0 **removed** the old top-level `main.py`, so a
+  config still launching `.venv/bin/python main.py` fails with `can't open file '.../main.py':
+  [Errno 2] No such file or directory` (see the server's `CHANGELOG.md`). The `bash -c` wrapper
+  avoids depending on `poetry` or the venv being on the launcher's PATH.
 - Every tool category, `memory` included, is registered on `main`; there are no profiles or
   toolsets to set. What you can write is governed by your database user's permissions.
-- **After a `git pull` of the server, re-check the launch line.** If the server moves to a
-  packaged layout (a `src/` package with `[project.scripts]`, as on `phase1/platform-spine`), the
-  entry point changes. A wrong launch line leaves the memory tools unavailable, and because the
+- **After a `git pull` of the server, re-check the launch line** against the server's
+  `CHANGELOG.md` — the entry point changed in v2.0.0 and may change again. A wrong launch line leaves the memory tools unavailable, and because the
   skills fail open that is easy to miss: check the client's MCP logs.
 - Reload Cursor / restart Claude Code so the tools load — a running client keeps its dead connection.
 
@@ -301,7 +301,7 @@ separate local `memory` DB and switch to the shared one via env — two database
 | Session end blocked by the drift gate | `.prd-drift-queue/` non-empty | run `/prd-sync` (clears the queue); it blocks at most once per stop; per-repo bypass: `touch .no-drift-gate` |
 | Insert rejected: "schema validation failed" | document violates the collection's JSON schema (missing project_id, bad enum value) | fix the document — the schema is the guard, not the bug; rules live in `setup_schema.py` |
 | `prd_patches`/`sync_observations` missing | database predates the migration round | `poetry run python .../scripts/migrate.py` |
-| MCP server won't start / memory tools silently missing | config launches `.venv/bin/arangodb-mcp`, which `main` never creates; or the venv is in Poetry's cache, so `.venv/` is missing | launch `.venv/bin/python main.py` (see STEP 3). If `.venv/` is missing, run `poetry env info --path` in the server dir; if it points outside the repo, `poetry env remove --all` and redo STEP 1. Then fully restart the client — a running one keeps its dead connection |
+| MCP server won't start / memory tools silently missing | config still launches `.venv/bin/python main.py`, removed in server v2.0.0 (log: `can't open file '.../main.py': [Errno 2]`); or the venv is in Poetry's cache, so `.venv/` is missing | launch `.venv/bin/arangodb-mcp` (see STEP 3); if that file is missing, re-run `poetry install` in the server dir. If `.venv/` is missing, run `poetry env info --path` in the server dir; if it points outside the repo, `poetry env remove --all` and redo STEP 1. Then fully restart the client — a running one keeps its dead connection |
 | `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
 | `ERR 1579 access after data-modification` | one AQL reads a collection after modifying it | split into separate statements |
 | Saving a pattern fails: `Expecting type Array` | inserting into a vector-indexed collection without the embedding | use `save-pattern` (embeds then inserts); don't insert-then-embed |
