@@ -101,8 +101,8 @@ poetry config virtualenvs.in-project true --local   # put the venv at ./.venv, w
 poetry install
 ```
 This creates the server's virtualenv at `.venv/` (has `python-arango`, etc.). The `poetry config` line
-asks for a project-local venv; without it Poetry uses its own cache, and the `.venv/bin/python` in
-STEP 3 does not exist. All scripts below run via `poetry run python …` from this directory.
+asks for a project-local venv; without it Poetry uses its own cache, and the `.venv/bin/arangodb-mcp`
+that STEP 3 launches does not exist. All scripts below run via `poetry run python …` from this directory.
 
 ## STEP 2 (admin / new backend only) — Create the schema (run once)
 > **Teammates joining the existing shared memory SKIP this** — the schema is already there, and
@@ -134,6 +134,8 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
     "ARANGO_ROOT_PASSWORD": "<your password — DO NOT COMMIT>",
     "ARANGO_DEFAULT_DB_NAME": "memory",
     "ARANGO_VERIFY_SSL": "true",
+    "MCP_PROFILE": "developer",
+    "MCP_TOOLSETS": "graph,search",
     "OPENAI_API_KEY": "sk-...your own key...",
     "EMBEDDING_MODEL": "text-embedding-3-small"
   }
@@ -148,8 +150,14 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
   config still launching `.venv/bin/python main.py` fails with `can't open file '.../main.py':
   [Errno 2] No such file or directory` (see the server's `CHANGELOG.md`). The `bash -c` wrapper
   avoids depending on `poetry` or the venv being on the launcher's PATH.
-- Every tool category, `memory` included, is registered on `main`; there are no profiles or
-  toolsets to set. What you can write is governed by your database user's permissions.
+- **`MCP_PROFILE` must be `developer`.** On `main` it defaults to `readonly`, which excludes the
+  whole `memory` category (`pattern-search`, `save-pattern`, `pattern-applied`, `save-drift-alert`,
+  `embed-*`) — the server starts fine but has no memory tools, and because the skills fail open no
+  error shows in the session (see the second BREAKING note in the server's `CHANGELOG.md`).
+  `developer` = read + write + `memory` + `transaction`, no admin; `MCP_TOOLSETS` adds `graph`
+  (traversals) and `search` (vector + hybrid). After a restart the server instructions should
+  report `61 active of 81 cataloged tools` with profile `developer`. Within that, what you can
+  write is still governed by your database user's permissions.
 - **After a `git pull` of the server, re-check the launch line** against the server's
   `CHANGELOG.md` — the entry point changed in v2.0.0 and may change again. A wrong launch line leaves the memory tools unavailable, and because the
   skills fail open that is easy to miss: check the client's MCP logs.
@@ -302,6 +310,7 @@ separate local `memory` DB and switch to the shared one via env — two database
 | Insert rejected: "schema validation failed" | document violates the collection's JSON schema (missing project_id, bad enum value) | fix the document — the schema is the guard, not the bug; rules live in `setup_schema.py` |
 | `prd_patches`/`sync_observations` missing | database predates the migration round | `poetry run python .../scripts/migrate.py` |
 | MCP server won't start / memory tools silently missing | config still launches `.venv/bin/python main.py`, removed in server v2.0.0 (log: `can't open file '.../main.py': [Errno 2]`); or the venv is in Poetry's cache, so `.venv/` is missing | launch `.venv/bin/arangodb-mcp` (see STEP 3); if that file is missing, re-run `poetry install` in the server dir. If `.venv/` is missing, run `poetry env info --path` in the server dir; if it points outside the repo, `poetry env remove --all` and redo STEP 1. Then fully restart the client — a running one keeps its dead connection |
+| Server starts, but no `pattern-*` / `save-*` tools | `MCP_PROFILE` unset, so it defaults to `readonly`, which excludes the `memory` category | add `"MCP_PROFILE": "developer"` and `"MCP_TOOLSETS": "graph,search"` to the `env` block (see STEP 3), then restart the client; `verify.py` flags this |
 | `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
 | `ERR 1579 access after data-modification` | one AQL reads a collection after modifying it | split into separate statements |
 | Saving a pattern fails: `Expecting type Array` | inserting into a vector-indexed collection without the embedding | use `save-pattern` (embeds then inserts); don't insert-then-embed |

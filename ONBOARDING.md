@@ -68,6 +68,8 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
       "ARANGO_ROOT_PASSWORD": "<your shared-cluster password — DO NOT COMMIT>",
       "ARANGO_DEFAULT_DB_NAME": "memory",
       "ARANGO_VERIFY_SSL": "true",
+      "MCP_PROFILE": "developer",
+      "MCP_TOOLSETS": "graph,search",
       "OPENAI_API_KEY": "sk-...your own key...",
       "EMBEDDING_MODEL": "text-embedding-3-small"
     }
@@ -86,6 +88,10 @@ Then **reload Cursor / restart Claude Code** so the tools load.
 > `.venv/bin/arangodb-mcp` (see the server's `CHANGELOG.md`). If `.venv/` or
 > `.venv/bin/arangodb-mcp` is missing, re-run `poetry install` in the server repo, then see the
 > Troubleshooting table in `setup.md`.
+>
+> **Don't drop `MCP_PROFILE`.** The server defaults to `readonly`, which leaves out every memory
+> tool (`pattern-search`, `save-pattern`, …) while still starting cleanly, so nothing looks wrong
+> in the session. `developer` + `graph,search` is what the shared memory needs.
 >
 > If your tools vanish after a `git pull` of the server, check the launch line first.
 
