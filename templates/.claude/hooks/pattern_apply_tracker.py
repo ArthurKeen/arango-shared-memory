@@ -14,6 +14,10 @@ import sys
 import tempfile
 from typing import Any
 
+# The sibling lives beside this file; add its directory for importers that load it by path.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from hook_paths import ensure_private_dir  # noqa: E402
+
 STATE_DIR = os.path.join(".claude", ".shared-memory-sessions")
 
 
@@ -59,7 +63,7 @@ def _load(path: str) -> dict[str, Any]:
 
 
 def _save(path: str, state: dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ensure_private_dir(os.path.dirname(path))
     fd, tmp = tempfile.mkstemp(prefix=".apply-", suffix=".json", dir=os.path.dirname(path))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

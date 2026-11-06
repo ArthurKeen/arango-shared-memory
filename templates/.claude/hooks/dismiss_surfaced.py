@@ -30,6 +30,10 @@ import re
 import sys
 import tempfile
 
+# The sibling lives beside this file; add its directory for importers that load it by path.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from hook_paths import ensure_private_dir  # noqa: E402
+
 # Claude and Cursor each namespace their own session state; order is search order.
 STATE_DIRS = (
     os.path.join(".claude", ".shared-memory-sessions"),
@@ -61,7 +65,7 @@ def _find_state(session_id: str) -> str | None:
 
 
 def _save(path: str, state: dict) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ensure_private_dir(os.path.dirname(path))
     fd, tmp = tempfile.mkstemp(prefix=".dismiss-", suffix=".json", dir=os.path.dirname(path))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

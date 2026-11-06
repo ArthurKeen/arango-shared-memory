@@ -59,8 +59,10 @@ class TmpProject(unittest.TestCase):
         self.dir.cleanup()
 
     def queue_files(self):
+        """The markers, as the gate counts them: the stamp and .gitignore are dotfiles."""
         qdir = os.path.join(self.cwd, ".prd-drift-queue")
-        return sorted(os.listdir(qdir)) if os.path.isdir(qdir) else []
+        names = os.listdir(qdir) if os.path.isdir(qdir) else []
+        return sorted(n for n in names if not n.startswith("."))
 
 
 class TestDriftQueue(TmpProject):
@@ -221,7 +223,7 @@ class TestStopGate(TmpProject):
         """
         hooks = os.path.join(self.cwd, ".claude", "hooks")
         os.makedirs(hooks)
-        for name in ("drift_queue.py", "reconcile_drift_queue.py"):
+        for name in ("drift_queue.py", "reconcile_drift_queue.py", "hook_paths.py"):
             shutil.copy(os.path.join(HOOKS, name), hooks)
         app = os.path.join(self.cwd, "app.py")
         with open(app, "w") as fh:
@@ -253,7 +255,7 @@ class TestReconcileAgainstAuditedTree(TmpProject):
         super().setUp()
         hooks = os.path.join(self.cwd, ".claude", "hooks")
         os.makedirs(hooks)
-        for name in ("drift_queue.py", "reconcile_drift_queue.py"):
+        for name in ("drift_queue.py", "reconcile_drift_queue.py", "hook_paths.py"):
             shutil.copy(os.path.join(HOOKS, name), hooks)
         self._write("app.py", "x = 1\n")
         if self.GITIGNORE is not None:
@@ -354,7 +356,8 @@ class TestReconcileAgainstAuditedTree(TmpProject):
             open(os.path.join(qdir, name), "w").close()
         before = self.git("status", "--porcelain", "--untracked-files=all")
         self.mark_synced()
-        self.assertEqual(sorted(os.listdir(qdir)), [".last-sync", "keepdir"])
+        # The directory's own .gitignore is kept like the stamp: both are dotfiles.
+        self.assertEqual(sorted(os.listdir(qdir)), [".gitignore", ".last-sync", "keepdir"])
         # The snapshot runs in a scratch index: nothing gets staged, and untracked
         # files stay untracked.
         after = self.git("status", "--porcelain", "--untracked-files=all")
@@ -515,6 +518,13 @@ class TestCursorApplyGate(unittest.TestCase):
         with open(path, "w") as fh:
             json.dump(state, fh)
         self.assertEqual(self.stop.followup(payload), "")
+
+    def test_cursor_drift_gate_ignores_the_stamp_and_gitignore(self):
+        """After /prd-sync the queue holds only dotfiles; counting them blocked forever."""
+        os.makedirs(".prd-drift-queue")
+        for name in (".last-sync", ".gitignore"):
+            open(os.path.join(".prd-drift-queue", name), "w").close()
+        self.assertEqual(self.stop.followup({"conversation_id": "conv-4"}), "")
 
     def test_cursor_drift_gate_returns_followup(self):
         os.makedirs(".prd-drift-queue")

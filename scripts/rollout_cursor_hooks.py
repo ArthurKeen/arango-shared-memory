@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import time
@@ -31,7 +32,8 @@ CURSOR_HOOK_FILES = (
 # dismiss_surfaced.py and reconcile_drift_queue.py must roll out with drift_stop_gate.sh:
 # the gate's block message names the first, and the gate runs the second with `|| true`,
 # so shipping the gate alone either points projects at a missing script or silently
-# skips shell edits. drift_queue.py rolls out too, because the reconciler imports from it.
+# skips shell edits. drift_queue.py rolls out too, because the reconciler imports from it,
+# and hook_paths.py, because every hook that reads the agent doc or writes state does.
 CLAUDE_HOOK_FILES = (
     "session_recall.py",
     "drift_queue.py",
@@ -40,6 +42,7 @@ CLAUDE_HOOK_FILES = (
     "dismiss_surfaced.py",
     "reconcile_drift_queue.py",
     "capture_candidates.py",
+    "hook_paths.py",
 )
 # Skills were never synced by this tool, only placed once by bootstrap_project.sh (which
 # skips existing files). The result was silent permanent drift: as of 2026-08-25, 29 of 32
@@ -150,10 +153,54 @@ def merged_hooks(existing: dict[str, Any], template: dict[str, Any]) -> dict[str
     return merged
 
 
+#: The script a canonical Claude hook command runs, in both the old cwd-relative form
+#: (``python3 .claude/hooks/x.py``) and the worktree-aware one.
+CLAUDE_HOOK_SCRIPT_RE = re.compile(r"\.claude/hooks/([A-Za-z0-9_]+\.(?:py|sh))")
+
+
+def _hook_script(hook: Any) -> str | None:
+    if not isinstance(hook, dict):
+        return None
+    match = CLAUDE_HOOK_SCRIPT_RE.search(str(hook.get("command") or ""))
+    return match.group(1) if match else None
+
+
+def _refreshed_hook_commands(hooks: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
+    """Each hook already present that runs a template script gets the template's hook.
+
+    Only hooks a project already has are touched; nothing is added, and other hooks and
+    every group's matcher are kept. Without this a changed command form never reached
+    an existing project: the cwd-relative commands failed in every git worktree
+    (2026-11-06), and the worktree-aware ones existed only in new bootstraps.
+    """
+    wanted = {}
+    for event, groups in (template.get("hooks") or {}).items():
+        for group in groups:
+            for hook in group.get("hooks") or []:
+                script = _hook_script(hook)
+                if script:
+                    wanted[(event, script)] = hook
+    refreshed = {}
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            refreshed[event] = groups
+            continue
+        new_groups = []
+        for group in groups:
+            if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+                group = dict(group)
+                group["hooks"] = [dict(wanted.get((event, _hook_script(h)), h))
+                                  if _hook_script(h) else h for h in group["hooks"]]
+            new_groups.append(group)
+        refreshed[event] = new_groups
+    return refreshed
+
+
 def merged_claude_settings(existing: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
-    """Add/refresh only the apply-tracker entry; preserve all other user settings."""
+    """Add/refresh the apply-tracker entry and refresh the canonical hook commands a
+    project already has; preserve all other user settings."""
     merged = dict(existing)
-    hooks = dict(merged.get("hooks") or {})
+    hooks = _refreshed_hook_commands(dict(merged.get("hooks") or {}), template)
     wanted = next(
         entry
         for entry in template["hooks"]["PostToolUse"]

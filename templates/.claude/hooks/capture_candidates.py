@@ -30,6 +30,10 @@ import re
 import sys
 import time
 
+# The sibling lives beside this file; add its directory for importers that load it by path.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from hook_paths import ensure_private_dir  # noqa: E402
+
 QUEUE_DIR = ".pattern-capture-queue"
 MIN_TOOL_CALLS = 5      # skip trivial sessions
 MAX_CANDIDATES = 8
@@ -195,7 +199,7 @@ def main() -> int:
             pass
         return 0
 
-    os.makedirs(QUEUE_DIR, exist_ok=True)
+    ensure_private_dir(QUEUE_DIR)
     with open(queue_file, "w", encoding="utf-8") as fh:
         json.dump({"session_id": session,
                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -7,7 +7,8 @@ Reads the hook payload from stdin. Two triggers:
     (requirements may have changed, not just code — a distinct signal)
 
 PRD_FILE is parsed at runtime from ./AGENTS.md (canonical) with ./CLAUDE.md as
-the legacy fallback, so this hook needs no per-project rendering. Fail-open: any
+the legacy fallback, then from the main checkout's copies when the cwd is a git
+worktree without them, so this hook needs no per-project rendering. Fail-open: any
 error exits 0 silently.
 """
 
@@ -18,6 +19,10 @@ import os
 import re
 import sys
 import time
+
+# The sibling lives beside this file; add its directory for importers that load it by path.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from hook_paths import agent_doc_paths, ensure_private_dir  # noqa: E402
 
 SOURCE_EXT = re.compile(
     r"\.(ts|js|tsx|jsx|py|go|rs|java|cs|cpp|c|rb|php|swift|kt)$", re.IGNORECASE)
@@ -35,8 +40,9 @@ EXCLUDED_TOP_LEVEL = frozenset({".claude", ".cursor", ".prd-drift-queue", ".git"
 
 def prd_file_from_claude_md(path=None):
     """Read PRD_FILE from the project's agent-doc — AGENTS.md (canonical) preferred,
-    CLAUDE.md the legacy fallback. An explicit ``path`` reads only that file."""
-    for p in ([path] if path is not None else ["AGENTS.md", "CLAUDE.md"]):
+    CLAUDE.md the legacy fallback, the main checkout's copies after the cwd's (see
+    hook_paths.agent_doc_paths). An explicit ``path`` reads only that file."""
+    for p in ([path] if path is not None else agent_doc_paths()):
         try:
             with open(p, encoding="utf-8") as fh:
                 m = re.search(r"PRD_FILE:\s*(\S+)", fh.read())
@@ -92,7 +98,7 @@ def enqueue(file_path, kind):
     from queuing twenty markers — the gate's message counts changes, and a count
     inflated by repetition misreports how much there is to audit.
     """
-    os.makedirs(".prd-drift-queue", exist_ok=True)
+    ensure_private_dir(".prd-drift-queue")
     base = os.path.basename(file_path)
     prefix = "prd_" if kind == "prd" else ""
     try:

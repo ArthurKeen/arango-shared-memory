@@ -26,6 +26,10 @@ import ssl
 import sys
 import urllib.request
 
+# The sibling lives beside this file; add its directory for importers that load it by path.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from hook_paths import agent_doc_paths  # noqa: E402
+
 SERVER_ID = "arangodb-memory-mcp"
 TIMEOUT = 4  # seconds per HTTP call; the whole hook budget is ~10s
 
@@ -35,9 +39,11 @@ def parse_claude_md(path=None):
 
     AGENTS.md (the consolidated canonical doc) is preferred; CLAUDE.md is the
     legacy fallback. Each field is taken from the first file that supplies a
-    concrete (non-placeholder) value. An explicit ``path`` reads only that file.
+    concrete (non-placeholder) value; the main checkout's copies are read after
+    the cwd's, for a git worktree whose CLAUDE.md is gitignored (see
+    hook_paths.agent_doc_paths). An explicit ``path`` reads only that file.
     """
-    paths = [path] if path is not None else ["AGENTS.md", "CLAUDE.md"]
+    paths = [path] if path is not None else agent_doc_paths()
     # Values may be wrapped in markdown emphasis (`id`, **id**, "id") — humans
     # format these docs. Capture permissively, then strip the decoration, so a
     # backtick-quoted PROJECT_ID doesn't silently disable the whole digest.
