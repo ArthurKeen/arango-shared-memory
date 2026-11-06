@@ -5,11 +5,19 @@
 # which makes the session continue with the reason as its directive. Rails:
 #   - loop-breaker: if stop_hook_active is set in the payload, we already blocked
 #     once this chain — always allow the stop (at most ONE block per stop chain).
-#   - bypass: a .no-drift-gate file in the repo disables the gate entirely.
+#   - bypass: a .no-drift-gate file in the repo disables the gate entirely. The main
+#     checkout's file also covers its git worktrees, which never have their own copy
+#     (it is gitignored).
 #   - fail-open: any parse/listing error allows the stop. A broken gate must
 #     never trap a session.
 
 INPUT=$(cat 2>/dev/null || true)
+
+# The checkout these hooks are installed in (<root>/.claude/hooks/<this file>). In a git
+# worktree the cwd is the worktree, which has no .claude/hooks of its own, so sibling
+# scripts are run from here, never by a cwd-relative path. Empty on failure, which makes
+# the reconciler call below fail, and that fails open like every other step.
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." 2>/dev/null && pwd)
 
 STOP_ACTIVE=$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
@@ -19,7 +27,7 @@ except Exception:
     print("0")' 2>/dev/null || echo 0)
 [ "$STOP_ACTIVE" = "1" ] && exit 0
 
-if [ -f .no-drift-gate ]; then
+if [ -f .no-drift-gate ] || { [ -n "$ROOT" ] && [ -f "$ROOT/.no-drift-gate" ]; }; then
   COUNT=0
 else
   # Recover edits the PostToolUse hook could not see before counting. It fires on
@@ -32,7 +40,7 @@ else
   # >&2 keeps the reconciler's notice AND any traceback visible; >/dev/null 2>&1
   # would silence both, and a hook that hides its own crashes is what caused
   # three multi-day outages here.
-  python3 .claude/hooks/reconcile_drift_queue.py >&2 || true
+  python3 "$ROOT/.claude/hooks/reconcile_drift_queue.py" >&2 || true
   COUNT=$(ls .prd-drift-queue 2>/dev/null | wc -l | tr -d ' ')
 fi
 case "$COUNT" in ''|*[!0-9]*) exit 0;; esac
@@ -69,9 +77,12 @@ APPLY_KEYS=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f3)
 case "$APPLY_PENDING" in ''|*[!0-9]*) APPLY_PENDING=0;; esac
 [ "$COUNT" -eq 0 ] && [ "$APPLY_PENDING" -eq 0 ] && exit 0
 
-python3 - "$COUNT" "$PRD_COUNT" "$APPLY_PENDING" "$APPLY_SID" "$APPLY_KEYS" 2>/dev/null <<'PY' || exit 0
-import json, sys
-count, prd, pending, sid, keys = (sys.argv + ["", ""])[1:6]
+python3 - "$COUNT" "$PRD_COUNT" "$APPLY_PENDING" "$APPLY_SID" "$APPLY_KEYS" "$ROOT" 2>/dev/null <<'PY' || exit 0
+import json, os, shlex, sys
+count, prd, pending, sid, keys, root = (sys.argv[1:] + [""] * 6)[:6]
+# Absolute, so the command also runs from a git worktree, which has no .claude/hooks.
+dismiss = (shlex.quote(os.path.join(root, ".claude/hooks/dismiss_surfaced.py")) if root
+           else ".claude/hooks/dismiss_surfaced.py")
 extra = f" (including {prd} PRD edit(s))" if prd not in ("", "0") else ""
 parts = []
 if count != "0":
@@ -90,7 +101,7 @@ if pending != "0":
                  "it for another approach, or it introduced a defect: pattern-applied with "
                  "outcome='failed'. That is a useful signal, not a confession, and it is the "
                  "only way a pattern's ranking can ever fall. (3) Reviewed and never tried: "
-                 f"python3 .claude/hooks/dismiss_surfaced.py {sid} {spaced} "
+                 f"python3 {dismiss} {sid} {spaced} "
                  "Do not use (3) for something you actually tried — that discards the "
                  "evidence. Never mark every result as applied.")
 print(json.dumps({

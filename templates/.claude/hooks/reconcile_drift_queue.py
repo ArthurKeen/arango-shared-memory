@@ -66,8 +66,13 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from drift_queue import classify, enqueue, prd_file_from_claude_md  # noqa: E402
+from hook_paths import ensure_private_dir  # noqa: E402
 
 QUEUE_DIR = ".prd-drift-queue"
+#: The main checkout's bypass also covers its worktrees: .no-drift-gate is gitignored,
+#: so a worktree never has its own copy. These hooks live in <checkout>/.claude/hooks.
+INSTALLED_BYPASS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".no-drift-gate")
 STAMP = os.path.join(QUEUE_DIR, ".last-sync")
 
 #: Staging a large untracked tree into a scratch index can take longer than the
@@ -224,7 +229,7 @@ def mark_synced() -> int:
     statically is exactly what agent command-safety checks refuse, which made the
     skill's own clear step unrunnable in those environments.
     """
-    os.makedirs(QUEUE_DIR, exist_ok=True)
+    ensure_private_dir(QUEUE_DIR)
     cleared = 0
     for name in sorted(os.listdir(QUEUE_DIR)):
         path = os.path.join(QUEUE_DIR, name)
@@ -253,7 +258,7 @@ def mark_synced() -> int:
 
 
 def main() -> int:
-    if os.path.exists(".no-drift-gate"):
+    if os.path.exists(".no-drift-gate") or os.path.exists(INSTALLED_BYPASS):
         return 0
 
     prd = prd_file_from_claude_md()

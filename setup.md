@@ -33,7 +33,11 @@ This system gives Claude Code (and Cursor) three capabilities across all your pr
    an apply or an explicit dismissal (`.claude/hooks/dismiss_surfaced.py`, local audit state that
    never writes to `shared_patterns`) — counting only applies made the gate unsatisfiable, since
    its own message correctly forbids marking every result as applied. Fail-open: an unreachable
-   database never breaks a session.
+   database never breaks a session. The hooks also run in **git worktrees**, which have no
+   `.claude/` of their own (it is gitignored): `settings.json` finds each script in the main
+   checkout, drift is queued and gated per worktree, the agent doc falls back to the main
+   checkout's, and the main checkout's `.no-drift-gate` covers its worktrees. Every directory
+   of hook state carries its own `*` `.gitignore`, so it never shows up in `git status`.
 4. **Project registry + read-path analytics with attribution** — `project_registry` tracks each
    project (including `prd_sha256`); `search_log` records interactive searches and automatic
    SessionStart recalls as distinct modes (query, hit, project, **who**); every write is stamped

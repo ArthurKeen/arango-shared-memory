@@ -43,7 +43,9 @@ def _drift_counts() -> tuple[int, int]:
     if os.path.exists(".no-drift-gate"):
         return 0, 0
     try:
-        names = os.listdir(".prd-drift-queue")
+        # Markers never start with a dot; the .last-sync stamp and the directory's
+        # .gitignore do, and counting them reported changes after every /prd-sync.
+        names = [n for n in os.listdir(".prd-drift-queue") if not n.startswith(".")]
     except OSError:
         return 0, 0
     return len(names), sum(name.startswith("prd_") for name in names)

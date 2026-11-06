@@ -140,6 +140,11 @@ term appears near the cited line. **Any IMPLEMENTED claim with a failed verdict 
 PARTIAL** with gap `evidence unverifiable: <reason>`. Exit code 1 means at least one claim failed
 — fix the classifications before Phase 3. This gate is not overridable.
 
+**In a git worktree** `.claude/` is not checked out (it is gitignored), so run the script
+from the main checkout, staying in the worktree so cited paths resolve there:
+`python3 "$(git worktree list --porcelain | sed -n '1s/^worktree //p')/.claude/skills/prd-sync/check_evidence.py"`.
+The same applies to the `.claude/hooks/` command in Phase 6c.
+
 ### Phase 3 — Drift report
 
 Emit a structured report:
@@ -348,7 +353,9 @@ python3 .claude/hooks/reconcile_drift_queue.py --mark-synced
 
 One command clears the queue markers and then stamps the audit point, so the order cannot
 be got wrong. It prints what it cleared and what it stamped; a non-zero exit means it
-failed, and the gate will keep firing. Do not fall back to `rm` — see below.
+failed, and the gate will keep firing. Do not fall back to `rm` — see below. In a git
+worktree, run it from the worktree with the main checkout's path, as in Phase 2.5:
+the queue and the stamp belong to the worktree, the script to the main checkout.
 
 The stamp records **the working tree this audit read** — a git *tree* of every tracked,
 modified and untracked file (`.gitignore` honoured), built in a scratch index so the real

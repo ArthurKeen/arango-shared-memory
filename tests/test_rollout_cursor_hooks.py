@@ -36,6 +36,30 @@ class TestRolloutCursorHooks(unittest.TestCase):
         other.mkdir()
         self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project])
 
+    def test_discovery_skips_linked_worktrees(self):
+        """A linked worktree uses its main checkout's hooks; refreshing it touched
+        worktrees of an excluded project that EXCLUDED_PROJECTS could not name."""
+        wt = Path(self.temp.name) / "cdf-feature"
+        (wt / ".claude" / "hooks").mkdir(parents=True)
+        (wt / ".claude" / "hooks" / "session_recall.py").write_text("", encoding="utf-8")
+        (wt / ".git").write_text("gitdir: /src/cdf/.git/worktrees/cdf-feature\n",
+                                 encoding="utf-8")
+        sub = Path(self.temp.name) / "with-submodule-git"
+        (sub / ".claude" / "hooks").mkdir(parents=True)
+        (sub / ".claude" / "hooks" / "session_recall.py").write_text("", encoding="utf-8")
+        (sub / ".git").write_text("gitdir: ../.git/modules/x\n", encoding="utf-8")
+        self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project, sub])
+
+    def test_discovery_skips_another_checkouts_templates(self):
+        """Run from a worktree of this repo, the main checkout's templates/ is not ours."""
+        other = Path(self.temp.name) / "arango-shared-memory"
+        (other / "scripts").mkdir(parents=True)
+        (other / "scripts" / "rollout_cursor_hooks.py").write_text("", encoding="utf-8")
+        hooks = other / "templates" / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "session_recall.py").write_text("", encoding="utf-8")
+        self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project])
+
     def test_discovers_a_skills_only_project(self):
         """A project with skills but no hooks must still be reachable.
 
@@ -125,6 +149,48 @@ class TestRolloutCursorHooks(unittest.TestCase):
             "pattern-search",
             merged["hooks"]["PostToolUse"][1]["matcher"],
         )
+
+    def test_merge_rewrites_the_cwd_relative_hook_commands_in_place(self):
+        """A project bootstrapped before 2026-11-06 runs `python3 .claude/hooks/x.py`,
+        which fails in every git worktree. The rollout used to refresh only the
+        apply-tracker entry, so the worktree-aware commands never reached it; appending
+        them instead would run each hook twice."""
+        template = json.loads(
+            (REPO / "templates" / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        old = {
+            "hooks": {
+                "SessionStart": [{"hooks": [
+                    {"type": "command", "command": "python3 .claude/hooks/session_recall.py",
+                     "timeout": 15}]}],
+                "PostToolUse": [
+                    {"matcher": "Write|Edit", "hooks": [
+                        {"type": "command", "command": "python3 .claude/hooks/drift_queue.py"},
+                        {"type": "command", "command": "ruff format"}]},
+                    {"matcher": "mcp__arangodb-memory-mcp__(pattern-search|pattern-applied)",
+                     "hooks": [{"type": "command",
+                                "command": "python3 .claude/hooks/pattern_apply_tracker.py"}]},
+                ],
+                "Stop": [{"hooks": [
+                    {"type": "command", "command": "python3 .claude/hooks/capture_candidates.py",
+                     "timeout": 10},
+                    {"type": "command", "command": "bash .claude/hooks/drift_stop_gate.sh"}]}],
+            },
+            "permissions": {"allow": ["Bash(pytest*)"]},
+        }
+        merged = self.mod.merged_claude_settings(old, template)
+
+        def commands(settings):
+            return [h["command"] for groups in settings["hooks"].values()
+                    for g in groups for h in g["hooks"]]
+
+        wanted = set(commands(template))
+        canonical = [c for c in commands(merged) if ".claude/hooks/" in c]
+        self.assertEqual(sorted(canonical), sorted(wanted), "every canonical hook, once")
+        self.assertIn("ruff format", commands(merged))
+        self.assertEqual(merged["hooks"]["PostToolUse"][0]["matcher"], "Write|Edit")
+        self.assertEqual(merged["permissions"], old["permissions"])
+        self.assertEqual(self.mod.merged_claude_settings(merged, template), merged)
 
     def test_apply_syncs_skills_into_subdirectories(self):
         """Skills must refresh, and must land in their nested paths.
