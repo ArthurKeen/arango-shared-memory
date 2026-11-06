@@ -106,12 +106,43 @@ def is_bootstrapped(here: Path) -> bool:
     return any((here / marker).is_file() for marker in BOOTSTRAP_MARKERS)
 
 
+def is_linked_worktree(here: Path) -> bool:
+    """True for a linked git worktree: its .git is a file naming .git/worktrees/<name>.
+
+    A linked worktree runs its main checkout's hooks (templates/.claude/settings.json),
+    so it never needs a rollout of its own, and refreshing one is how an excluded
+    project gets touched anyway: EXCLUDED_PROJECTS matches directory names, and five
+    worktrees of contextual-data-fabric named cdf-* were discovered (2026-11-06).
+    A submodule's .git file names .git/modules/ and is not a worktree.
+    """
+    dot_git = here / ".git"
+    if not dot_git.is_file():
+        return False
+    try:
+        line = dot_git.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return line.startswith("gitdir:") and "/worktrees/" in line.replace(os.sep, "/")
+
+
+def is_template_source(here: Path) -> bool:
+    """The templates/ directory of any arango-shared-memory checkout, not just this one.
+
+    Its .claude/ is the source the rollout copies from. Run from a worktree of this
+    repo, the main checkout's templates/ looked like a bootstrapped project.
+    """
+    return here.name == "templates" and (here.parent / "scripts" / Path(__file__).name).is_file()
+
+
 def discover(root: Path) -> list[Path]:
     projects: list[Path] = []
     for current, dirs, _ in os.walk(root):
         dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
         here = Path(current)
-        if here == REPO_ROOT / "templates":
+        if here == REPO_ROOT / "templates" or is_template_source(here):
+            dirs[:] = []
+            continue
+        if is_bootstrapped(here) and is_linked_worktree(here):
             dirs[:] = []
             continue
         if is_bootstrapped(here):

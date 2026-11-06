@@ -36,6 +36,30 @@ class TestRolloutCursorHooks(unittest.TestCase):
         other.mkdir()
         self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project])
 
+    def test_discovery_skips_linked_worktrees(self):
+        """A linked worktree uses its main checkout's hooks; refreshing it touched
+        worktrees of an excluded project that EXCLUDED_PROJECTS could not name."""
+        wt = Path(self.temp.name) / "cdf-feature"
+        (wt / ".claude" / "hooks").mkdir(parents=True)
+        (wt / ".claude" / "hooks" / "session_recall.py").write_text("", encoding="utf-8")
+        (wt / ".git").write_text("gitdir: /src/cdf/.git/worktrees/cdf-feature\n",
+                                 encoding="utf-8")
+        sub = Path(self.temp.name) / "with-submodule-git"
+        (sub / ".claude" / "hooks").mkdir(parents=True)
+        (sub / ".claude" / "hooks" / "session_recall.py").write_text("", encoding="utf-8")
+        (sub / ".git").write_text("gitdir: ../.git/modules/x\n", encoding="utf-8")
+        self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project, sub])
+
+    def test_discovery_skips_another_checkouts_templates(self):
+        """Run from a worktree of this repo, the main checkout's templates/ is not ours."""
+        other = Path(self.temp.name) / "arango-shared-memory"
+        (other / "scripts").mkdir(parents=True)
+        (other / "scripts" / "rollout_cursor_hooks.py").write_text("", encoding="utf-8")
+        hooks = other / "templates" / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "session_recall.py").write_text("", encoding="utf-8")
+        self.assertEqual(self.mod.discover(Path(self.temp.name)), [self.project])
+
     def test_discovers_a_skills_only_project(self):
         """A project with skills but no hooks must still be reachable.
 
