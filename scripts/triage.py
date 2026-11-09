@@ -427,7 +427,7 @@ def main() -> int:
         return list(db.aql.execute(
             DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
 
-    def resync_gaps(label, projects):
+    def resync_gaps(label, projects, snapshot=None):
         """Recompute open_gaps for exactly `projects`. No-op on an empty list.
 
         The caller chooses the set, deliberately. A SWEEP may only touch what it swept:
@@ -439,7 +439,7 @@ def main() -> int:
         if not projects:
             print(f"  {label}: nothing to recompute.")
             return
-        before = {r["project"]: r["recorded"] for r in drifted()}
+        before = {r["project"]: r["recorded"] for r in (snapshot or drifted())}
         written = list(db.aql.execute(
             RESYNC_GAPS_AQL, bind_vars={"projects": sorted(projects)}))
         # Keyed by project, never zipped: RESYNC_GAPS_AQL has no SORT while
@@ -470,28 +470,28 @@ def main() -> int:
                 "first).\n")
             return 1
         rows = drifted()
+        # An orphaned project -- alerts but no project_registry row -- is an
+        # anomaly in its own right, so it is reported WHENEVER it exists, not only
+        # when nothing was compared. Nesting it under the empty-result branch made
+        # it unreachable fleet-wide (that branch is never taken when any dormant
+        # project exists), which is the same reachability defect the `active`
+        # keying had.
+        unregistered = list(db.aql.execute(
+            "LET known = (FOR r IN project_registry RETURN r.project_id) "
+            "FOR a IN drift_alerts "
+            "FILTER @proj == '' OR a.project_id == @proj "
+            "FILTER a.project_id NOT IN known "
+            "COLLECT p = a.project_id RETURN p",
+            bind_vars={"proj": ONLY_PROJECT}))
+        if unregistered:
+            print(f"    note: {len(unregistered)} project(s) in scope have alerts "
+                  "but no project_registry row, so they have no counter to repair "
+                  "either way:\n      " + ", ".join(sorted(unregistered)))
         if not CONFIRMED:
             print(f"\n  --repair-gaps: DRY RUN — {len(rows)} project(s) have a drifted "
                   "open_gaps:")
             for r in rows:
                 print(f"    {r['project']}: recorded {r['recorded']} -> live {r['live']}")
-            # An orphaned project -- alerts but no project_registry row -- is an
-            # anomaly in its own right, so it is reported WHENEVER it exists, not only
-            # when nothing was compared. Nesting it under the empty-result branch made
-            # it unreachable fleet-wide (that branch is never taken when any dormant
-            # project exists), which is the same reachability defect the `active`
-            # keying had.
-            unregistered = list(db.aql.execute(
-                "LET known = (FOR r IN project_registry RETURN r.project_id) "
-                "FOR a IN drift_alerts "
-                "FILTER @proj == '' OR a.project_id == @proj "
-                "FILTER a.project_id NOT IN known "
-                "COLLECT p = a.project_id RETURN p",
-                bind_vars={"proj": ONLY_PROJECT}))
-            if unregistered:
-                print(f"    note: {len(unregistered)} project(s) in scope have alerts "
-                      "but no project_registry row, so they have no counter to repair "
-                      "either way:\n      " + ", ".join(sorted(unregistered)))
             if not rows:
                 # "No drift" and "nothing was eligible to compare" are different
                 # answers, and reporting the second as the first claims a consistency
@@ -526,7 +526,7 @@ def main() -> int:
             return 0
         print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
               "is modified.")
-        resync_gaps("--repair-gaps", [r["project"] for r in rows])
+        resync_gaps("--repair-gaps", [r["project"] for r in rows], snapshot=rows)
         return 0
 
     if not AGE_OUT:
@@ -542,7 +542,8 @@ def main() -> int:
         drift_rows = drifted()
         if drift_rows:
             print(f"    But {len(drift_rows)} project(s) have a drifted open_gaps "
-                  "counter.\n    Run: " + repair_hint())
+                  "counter.\n    Review with: "
+                  + repair_hint().replace(" --yes", "") + "   (then add --yes)")
         return 0
 
     reason = f"no review in {STALE_DAYS}+ days; aged out by scripts/triage.py"
@@ -566,8 +567,11 @@ def main() -> int:
     print(f"\n  REVERSAL (copy before continuing):\n    "
           + REVERSAL_ALERTS.format(batch=batch))
     print("    Scoped to this batch by aged_out_batch, so it needs no flags and cannot "
-          "touch\n    anything this run did not change. It is the WHOLE undo: a sweep "
-          "writes alerts\n    and nothing else.\n")
+          "touch\n    anything this run did not change. It is the WHOLE undo of the "
+          "SWEEP: a sweep\n    writes alerts and nothing else.")
+    print("    If you have since run --repair-gaps, run it once more after this — the "
+          "counter\n    was recomputed against the swept state and needs recomputing "
+          "against the restored one.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "batch": batch, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
@@ -575,12 +579,23 @@ def main() -> int:
         print(f"    ({len(ancient) - len(updated)} row(s) were no longer open and were "
               "skipped — a concurrent /prd-sync moved them on)")
 
-    # The counter is now stale for the swept projects, deliberately. Naming it and
-    # stopping is the whole point: see the note on the write path above.
-    drift_rows = drifted()
-    if drift_rows:
+    # The counter is now stale for the projects THIS sweep touched, deliberately.
+    # Naming it and stopping is the whole point: see the note on the write path above.
+    # Scoped to the swept projects, because fleet-wide drift includes dormant projects
+    # with a pre-existing /prd-sync definitional mismatch that this run never touched --
+    # attributing those to the sweep overstates what it did.
+    swept = {r["project"] for r in db.aql.execute(
+        "FOR a IN drift_alerts FILTER a._key IN @keys "
+        "COLLECT project = a.project_id RETURN { project }",
+        bind_vars={"keys": updated})}
+    mine = [r for r in drifted() if r["project"] in swept]
+    if mine:
         print(f"\n  project_registry.open_gaps is now drifted for "
-              f"{len(drift_rows)} dormant project(s). This sweep did not touch it.")
+              f"{len(mine)} project(s) this sweep touched. The sweep did not change it.")
+        for r in mine[:8]:
+            print(f"    {r['project']}: recorded {r['recorded']} -> live {r['live']}")
+        if len(mine) > 8:
+            print(f"    … {len(mine) - 8} more")
         print(f"    Review and fix with: {repair_hint().replace(' --yes', '')}"
               "   (then add --yes)")
     return 0

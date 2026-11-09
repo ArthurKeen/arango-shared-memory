@@ -219,7 +219,13 @@ class TestTriageRespectsTheCollectionSchema(unittest.TestCase):
 
 
 class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
-    """Ageing an alert out must also fix project_registry.open_gaps.
+    """open_gaps must be repairable after a sweep leaves it drifted.
+
+    NOTE: a sweep no longer writes this counter at all -- see
+    TestASweepWritesAlertsAndNothingElse for why that second mutation was removed.
+    What these guards cover is the repair path that replaced it.
+
+    Historical context for the counter problem:
 
     open_gaps is denormalized and only /prd-sync rewrites it. The first --age-out run
     swept 53 alerts and left all 8 affected projects advertising their pre-sweep count
@@ -235,7 +241,7 @@ class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
     def setUp(self):
         self.src = _read()
 
-    def test_a_resync_query_exists_and_is_run_after_the_sweep(self):
+    def test_a_resync_query_exists_and_is_reachable(self):
         self.assertIn("RESYNC_GAPS_AQL", self.src,
                       "nothing repairs project_registry.open_gaps after a sweep")
         resync = _block(self.src, "RESYNC_GAPS_AQL")
@@ -292,7 +298,10 @@ class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
 
 
 class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
-    """A sweep makes TWO mutations, so both must be undoable and both repairable.
+    """A sweep makes ONE mutation, and its undo must be complete and repeatable.
+
+    It used to make two. The history of that second write is in
+    TestASweepWritesAlertsAndNothingElse; these guards cover the undo itself.
 
     Three defects from the second review of #8:
 
@@ -363,8 +372,10 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
 
     def test_repair_gaps_also_requires_explicit_confirmation(self):
         """It writes to shared data, so it gets the same gate as --age-out."""
+        # Bounded by the branch's own return, not a byte count: inserting the
+        # orphaned-project probe pushed the dry-run gate past a fixed window.
         idx = self.src.index("if REPAIR_GAPS:")
-        branch = self.src[idx:idx + 2200]
+        branch = self.src[idx:self.src.index("    if not AGE_OUT:", idx)]
         self.assertIn("if not CONFIRMED:", branch)
         self.assertIn("DRY RUN", branch)
 
@@ -493,14 +504,22 @@ class TestASweepWritesAlertsAndNothingElse(unittest.TestCase):
         self.assertNotIn("RESYNC_GAPS_AQL", sweep)
 
     def test_the_counter_is_written_from_exactly_one_place(self):
+        """Counted as REFERENCES, not as a whitespace-exact literal.
+
+        The first version matched "db.aql.execute(\\n            RESYNC_GAPS_AQL"
+        exactly, so a second write site formatted differently passed green and any
+        reformat of the existing one failed spuriously.
+        """
+        # Comment lines are excluded: prose mentioning the query is not a write path,
+        # and counting it made the guard track documentation rather than code.
+        code = [ln for ln in self.src.splitlines()
+                if "RESYNC_GAPS_AQL" in ln and not ln.lstrip().startswith("#")]
         self.assertEqual(
-            self.src.count("db.aql.execute(\n            RESYNC_GAPS_AQL"), 1,
-            "open_gaps is written from more than one path")
-        idx = self.src.index("RESYNC_GAPS_AQL, bind_vars=")
-        enclosing = self.src[:idx]
-        self.assertIn("def resync_gaps(label, projects):",
-                      enclosing[enclosing.rindex("def "):] if "def " in enclosing
-                      else "", )
+            len(code), 2,
+            f"RESYNC_GAPS_AQL appears on {len(code)} code lines (expected the "
+            f"definition plus one execute): {code}")
+        self.assertRegex(self.src, r"def resync_gaps\(label, projects",
+                         "the single write path is not resync_gaps()")
 
     def test_no_stash_machinery_survives(self):
         """The stash was the last attempt to make the second write reversible; leaving
