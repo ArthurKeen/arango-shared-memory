@@ -403,6 +403,24 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
             "the printed undo still tells the operator to re-run the CLI, which is "
             "how --project and --stale-days got dropped")
 
+    def test_the_undo_does_not_resurrect_an_alert_prd_sync_closed(self):
+        """The same race AGE_OUT_AQL guards, in the other direction, with data loss.
+
+        The undo is pasted some time after the sweep -- deliberately; REVERSAL_GAPS
+        uses DATE_NOW() for exactly that reason. A /prd-sync closing one of these rows
+        in between would otherwise see it flipped back to "open" while it keeps
+        closed_at, and the TTL index on drift_alerts.closed_at
+        (scripts/phase3_lifecycle.py, 90 days) does not look at status -- so the
+        resurrected alert is silently DELETED.
+        """
+        stmt = re.search(r"REVERSAL_ALERTS = \((.*?)\)\n", self.src, re.DOTALL)
+        self.assertTrue(stmt, "REVERSAL_ALERTS not found — this guard is inert")
+        self.assertRegex(
+            stmt.group(1), r'a\.status == "stale"',
+            "REVERSAL_ALERTS restores by aged_out_at alone, so a row closed between "
+            "the sweep and the paste is reopened with closed_at intact and then "
+            "deleted by the status-agnostic TTL")
+
     def test_a_re_sweep_clears_the_previous_reversal_marker(self):
         """Otherwise a second undo silently reverts nothing.
 
@@ -507,11 +525,38 @@ class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
         self.assertIn("none compared", self.src,
                       "an empty --repair-gaps result cannot distinguish 'no drift' "
                       "from 'nothing was eligible to compare'")
-        # Both DRIFTED_GAPS_AQL and the active-project probe iterate project_registry,
-        # so a project with alerts but no registry row is compared by neither.
-        self.assertIn("no project_registry row", self.src,
+        # A project with alerts but no registry row is compared by neither
+        # DRIFTED_GAPS_AQL nor the active probe, so it must be named too.
+        self.assertIn("project_registry row, so there is no counter to", self.src,
                       "a project with alerts but no registry row still falls through "
                       "to the 'all clean' message")
+
+    def test_the_empty_result_is_judged_on_what_was_compared(self):
+        """Keying off what was EXCLUDED got the one case that matters backwards.
+
+        Active and dormant partition project_registry, so a fleet-wide run almost
+        always has active projects. Keying the message off `active` therefore reported
+        a genuinely clean result as "none compared" -- the same false claim the block
+        exists to prevent, inverted -- and made the unregistered branch unreachable
+        without --project.
+        """
+        self.assertIn("compared = list(db.aql.execute(", self.src,
+                      "the empty-result message is not based on the set that was "
+                      "actually compared")
+        idx = self.src.index("compared = list(db.aql.execute(")
+        after = self.src[idx:idx + 1400]
+        self.assertIn("if compared:", after,
+                      "the clean-result branch does not key off the compared set")
+        self.assertIn("matches the live count for all", after)
+        # The excluded sets may only EXPLAIN an empty comparison, never decide it:
+        # whatever follows "if compared:" must be the clean message, and the
+        # excluded-set reporting must sit on the else side.
+        clean_at = after.index("if compared:")
+        else_at = after.index("else:", clean_at)
+        self.assertNotIn("none compared", after[clean_at:else_at],
+                         "the clean branch claims nothing was compared")
+        self.assertIn("none compared", after[else_at:],
+                      "the excluded-set branch does not say nothing was compared")
 
     def test_the_sweep_dry_run_names_the_registry_writes(self):
         """Listing only alert keys made the second mutation invisible until after it
@@ -532,6 +577,33 @@ class TestVerifyReportsEveryAlertStatus(unittest.TestCase):
                       "verify.py does not pin the statuses it always reports")
         self.assertIn("by_status.get(s, 0)", self.src,
                       "a zero-count status would vanish from the line")
+
+    def test_the_expected_tuple_matches_the_schema_enum(self):
+        """A third hardcoded status census, and the only one the PR left unguarded.
+
+        setup_schema.py declares the enum, install_visualizer.py colours it, verify.py
+        pins which values are always printed even at zero. The first two are
+        cross-checked; without this, the next widening passes CI and silently loses the
+        always-print-at-zero behaviour that this tuple is the whole point of.
+        """
+        m = re.search(r'expected = \((.*?)\)', self.src, re.DOTALL)
+        self.assertTrue(m, "verify.py's expected-status tuple not found")
+        listed = {v.strip().strip('"\'') for v in m.group(1).split(",") if v.strip()}
+        with open(os.path.join(REPO, "scripts", "setup_schema.py"),
+                  encoding="utf-8") as fh:
+            schema_src = fh.read()
+        block = re.search(r'"drift_alerts":\s*\{\s*"rule".*?"level"', schema_src,
+                          re.DOTALL)
+        self.assertTrue(block, "drift_alerts schema block not found — guard is inert")
+        enum_m = re.search(r'"status":\s*\{"enum":\s*\[(.*?)\]\}', block.group(0))
+        self.assertTrue(enum_m, "status enum not found")
+        enum = {v.strip().strip('"') for v in enum_m.group(1).split(",")
+                if v.strip() != "None"}
+        self.assertEqual(
+            listed, enum,
+            f"verify.py always-prints {sorted(listed)} but the schema allows "
+            f"{sorted(enum)} — a status is either never reported at zero, or reported "
+            "for a value the schema forbids")
 
     def test_an_unexpected_or_null_status_is_still_surfaced(self):
         self.assertIn("'(no status)'", self.src,

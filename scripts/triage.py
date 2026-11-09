@@ -304,8 +304,16 @@ FOR p IN @projects
 # no flag can be forgotten, and nothing outside it is touched. Step 1 therefore does NOT
 # clear aged_out_at -- it stamps reverted_at and leaves the trail, which is what lets
 # step 2 still find the projects (and is better provenance anyway).
+# The status guard is the same race AGE_OUT_AQL guards, in the other direction and with
+# worse consequences. The undo is pasted some time after the sweep -- deliberately so --
+# and a /prd-sync closing one of these rows in between would otherwise see it flipped
+# back to "open" while it keeps closed_at. The TTL index on drift_alerts.closed_at
+# (scripts/phase3_lifecycle.py, 90 days) does not look at status, so the resurrected
+# alert is then silently DELETED. Restoring only rows that are still stale means a row
+# that moved on is left alone.
 REVERSAL_ALERTS = (
     'FOR a IN drift_alerts FILTER a.aged_out_at == "{now}" AND a.reverted_at == null '
+    'AND a.status == "stale" '
     'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
     'IN drift_alerts')
 
@@ -460,17 +468,36 @@ def main() -> int:
                     "FILTER a.project_id NOT IN known "
                     "COLLECT p = a.project_id RETURN p",
                     bind_vars={"proj": ONLY_PROJECT}))
-                if active:
-                    print(f"    (none compared — {len(active)} project(s) in scope have "
-                          f"synced within {STALE_DAYS}d, so /prd-sync owns their "
-                          "counter:\n     " + ", ".join(sorted(active)) + ")")
-                elif unregistered:
-                    print(f"    (none compared — {len(unregistered)} project(s) in "
-                          "scope have alerts but no project_registry row, so there is "
-                          "no counter to\n     repair: "
-                          + ", ".join(sorted(unregistered)) + ")")
+                # Key off what WAS compared, never off what was excluded. Keying off
+                # `active` was wrong in the one case that matters: active and dormant
+                # partition project_registry, so a fleet-wide run almost always has
+                # active projects, and a genuinely clean result was reported as "none
+                # compared" -- the same false claim this block exists to prevent, just
+                # inverted. It also made the unregistered branch unreachable without
+                # --project.
+                compared = list(db.aql.execute(
+                    "LET cutoff = @cutoff "
+                    "FOR r IN project_registry "
+                    "FILTER @proj == '' OR r.project_id == @proj "
+                    "FILTER r.last_sync == null OR "
+                    "LEFT(r.last_sync, 10) < LEFT(cutoff, 10) "
+                    "RETURN r.project_id",
+                    bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+                if compared:
+                    print(f"    (none — open_gaps matches the live count for all "
+                          f"{len(compared)} dormant project(s) in scope)")
                 else:
-                    print("    (none — the counter matches the alerts everywhere)")
+                    why = []
+                    if active:
+                        why.append(f"{len(active)} have synced within {STALE_DAYS}d, so "
+                                   "/prd-sync owns their counter: "
+                                   + ", ".join(sorted(active)))
+                    if unregistered:
+                        why.append(f"{len(unregistered)} have alerts but no "
+                                   "project_registry row, so there is no counter to "
+                                   "repair: " + ", ".join(sorted(unregistered)))
+                    print("    (none compared — nothing in scope was eligible"
+                          + (":\n     " + "\n     ".join(why) if why else "") + ")")
             print("    Add --yes to commit.")
             return 0
         print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
