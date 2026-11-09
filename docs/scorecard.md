@@ -442,20 +442,24 @@ asserts only that nobody has looked in 60+ days, which the timestamps prove.
 > enum in this repo's own `setup_schema.py` and `"stale"` was refused with ERR 1620 —
 > the database caught it and nothing was written.)
 >
-> **It is no longer reversible by one UPDATE.** The sweep makes *two* mutations: the
-> alert status, and the denormalized `project_registry.open_gaps`, which only
-> `/prd-sync` otherwise rewrites — and these projects were chosen precisely for not
-> running it, so a missed repair would have been permanent. The script prints **two
-> self-contained AQL statements** before it writes anything; run both, in order.
+> **It is reversible by one UPDATE — but only because the sweep was cut back to one
+> mutation.** For several iterations the sweep also recomputed the denormalized
+> `project_registry.open_gaps`, and that second write was never cleanly undoable. Ten
+> review rounds on this change found a defect in that one area eight times running:
+> recomputing on undo discarded any drift that predated the sweep; keying the undo on a
+> second-granular timestamp meant two sweeps in the same second reverted each other;
+> a batch-keyed stash had one slot per row, so a second sweep clobbered the first
+> batch's stash, and the restore nulled the stash it consumed so re-pasting overwrote
+> what it had just restored.
 >
-> They are not "re-run the CLI with the right flags", and that distinction was learned
-> the hard way. The flag-based version kept losing scope — first `--project` (rewriting
-> counters fleet-wide after a scoped sweep), then `--stale-days` (a sweep at a 30-day
-> threshold is not dormant at the default 60, so the repair selected nothing and left
-> the counter at zero permanently) — all the same defect: an undo that re-derives its
-> own batch will keep getting the batch wrong. Both statements are keyed to a unique
-> batch id stamped on the swept rows, so no flag can be forgotten and nothing outside
-> that sweep can be touched.
+> The lesson generalises past this script: **`open_gaps` is a derived aggregate with
+> two writers** — `/prd-sync` sets it from its audit's MISSING+PARTIAL count, the repair
+> from the live open-alert count — and a value like that does not belong inside an
+> undoable batch at all. So a sweep now writes alerts and nothing else. Its undo is one
+> self-contained statement keyed to a unique batch id stamped on the swept rows, needing
+> no flags and unable to touch anything that run did not change. The counter is left
+> drifted on purpose and the run ends by naming `--repair-gaps`, which lists every
+> change before committing and requires `--all` to go fleet-wide.
 >
 > `--repair-gaps` is restricted to dormant projects on purpose. `open_gaps` has two
 > writers with different definitions — `/prd-sync` sets it from its audit's

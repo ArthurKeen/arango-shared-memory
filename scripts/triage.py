@@ -45,14 +45,27 @@ ancient open alerts to status 'stale' — NOT deleted, NOT closed. A close asser
 the gap was fixed, which nobody has verified; 'stale' asserts only that nobody has
 looked in a long time, which is true and provable from the timestamps. Every aged
 row records aged_out_at / aged_out_reason / aged_out_by and keeps its original
-status in prior_status. The sweep makes TWO mutations -- the alert status and the
-denormalized project_registry.open_gaps -- so the undo is two queries, both printed
-before anything is written. Both are SELF-CONTAINED and keyed on this batch's
-aged_out_batch -- a timestamp plus random bytes, because aged_out_at is only
-second-granular and two sweeps in the same second would share it. They need no flags,
-cannot miss a project and cannot touch one the run did not change. (Step 1 stamps
-reverted_at and leaves aged_out_batch in place, which lets step 2 identify the batch;
-step 2 restores the counter the sweep stashed in prior_open_gaps.)
+status in prior_status.
+
+A SWEEP WRITES ALERTS AND NOTHING ELSE, so its undo is one self-contained query,
+printed before anything is written and keyed on this batch's aged_out_batch (a
+timestamp plus random bytes -- aged_out_at is only second-granular, and two sweeps in
+the same second would share it). It needs no flags, cannot miss a row and cannot
+touch one the run did not change.
+
+That single-mutation rule is the result of getting it wrong repeatedly. The sweep
+used to also recompute the denormalized project_registry.open_gaps, and that second
+write was never cleanly reversible: the counter has no per-batch identity, so each
+attempt grew another mechanism -- a two-statement undo, then a batch-keyed stash --
+and each one had a hole (a second sweep of the same project clobbered the first
+batch's stash; the restore nulled the stash it consumed, so re-pasting the pair
+overwrote the value it had just restored). The counter is a DERIVED aggregate with
+two writers (/prd-sync's audit count, and this script's live-alert count), which is
+precisely the thing that does not belong inside an undoable batch.
+
+So a sweep now leaves the counter drifted on purpose and ends by naming the command
+that fixes it. --repair-gaps is the only path that writes open_gaps, it lists every
+change before committing, and a fleet-wide run must ask with --all.
 
 Writes touch shared prod data that four people now read, so --age-out additionally
 requires --yes and prints the exact reversal query before it runs.
@@ -300,43 +313,19 @@ FOR r IN project_registry
   RETURN { project: r.project_id, recorded, live }
 """
 
-# @batch is the sweep's batch id, or "" for a standalone --repair-gaps.
-#
-# When a sweep calls this, it stashes the PRE-SWEEP counter in prior_open_gaps keyed by
-# the batch. Alerts get prior_status for exactly this reason and the registry counter
-# previously got nothing, so the printed undo could not restore a counter that was
-# ALREADY drifted before the sweep: dormant project recorded 14 / live 9, the sweep
-# writes 0, the undo recomputes 9, and the 14 is gone -- an irreversible overwrite of an
-# audit-derived value, which is the very thing --repair-gaps --yes is gated behind --all
-# to avoid. A standalone repair stashes nothing, because there is no batch to undo and
-# the operator was shown every change first.
+# Recomputes the denormalized counter from the live open alerts. The ONLY place
+# open_gaps is written by this script, reached only from --repair-gaps -- never from
+# a sweep. See the note above --age-out's write path for why.
 RESYNC_GAPS_AQL = """
 FOR p IN @projects
   LET live = LENGTH(FOR a IN drift_alerts
                     FILTER a.project_id == p AND a.status == "open" RETURN 1)
   FOR r IN project_registry FILTER r.project_id == p
-    UPDATE r WITH MERGE({ open_gaps: live },
-                        @batch == "" ? {} :
-                        { prior_open_gaps: { batch: @batch,
-                                             value: r.open_gaps == null ? 0
-                                                                        : r.open_gaps } })
-      IN project_registry
+    UPDATE r WITH { open_gaps: live } IN project_registry
     RETURN { project: p, open_gaps: live }
 """
 
-# The undo is two SELF-CONTAINED queries, deliberately not "run the CLI again with the
-# right flags". The flag-based version kept growing holes: step 2 was an unscoped
-# --repair-gaps, so it dropped --project (rewriting counters fleet-wide after a scoped
-# sweep), then dropped --stale-days (a project swept under a 30-day threshold is not
-# dormant under the default 60, so the repair silently selected nothing and left the
-# counter at 0 forever), and it touched dormant projects that were never swept at all.
-# Every one of those was the same defect: the undo had to re-derive the batch from
-# flags instead of knowing it.
-#
-# Keying both statements on aged_out_batch removes the class. The batch identifies itself,
-# no flag can be forgotten, and nothing outside it is touched. Step 1 therefore does NOT
-# clear aged_out_at -- it stamps reverted_at and leaves the trail, which is what lets
-# step 2 still find the projects (and is better provenance anyway).
+
 # The status guard is the same race AGE_OUT_AQL guards, in the other direction and with
 # worse consequences. The undo is pasted some time after the sweep -- deliberately so --
 # and a /prd-sync closing one of these rows in between would otherwise see it flipped
@@ -350,34 +339,6 @@ REVERSAL_ALERTS = (
     'AND a.status == "stale" '
     'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
     'IN drift_alerts')
-
-# Restores the counter the sweep STASHED, rather than recomputing it. Recomputing
-# cannot undo anything: it produces whatever the alerts say now, which is how a
-# pre-sweep drift was silently discarded. Falls back to the live count only when no
-# stash exists for this batch (a sweep from before prior_open_gaps was recorded).
-#
-# The dormancy gate still applies, evaluated when the statement RUNS (DATE_SUBTRACT,
-# not a baked timestamp): the undo may be pasted long after the sweep, and if /prd-sync
-# revived a swept project in between, that project now has a fresh audit-derived
-# open_gaps which this must not clobber.
-REVERSAL_GAPS = (
-    'LET cutoff = DATE_SUBTRACT(DATE_NOW(), {days}, "day") '
-    'LET dormant = (FOR r IN project_registry '
-    'FILTER r.last_sync == null OR LEFT(r.last_sync, 10) < LEFT(cutoff, 10) '
-    'RETURN r.project_id) '
-    'LET touched = (FOR a IN drift_alerts FILTER a.aged_out_batch == "{batch}" '
-    'COLLECT p = a.project_id RETURN p) '
-    'FOR p IN touched FILTER p IN dormant '
-    'FOR r IN project_registry FILTER r.project_id == p '
-    'LET live = LENGTH(FOR a IN drift_alerts '
-    'FILTER a.project_id == p AND a.status == "open" RETURN 1) '
-    'LET restored = (r.prior_open_gaps != null AND '
-    'r.prior_open_gaps.batch == "{batch}") ? r.prior_open_gaps.value : live '
-    'UPDATE r WITH {{ open_gaps: restored, prior_open_gaps: null }} '
-    'IN project_registry '
-    'RETURN {{ project: p, open_gaps: restored }}')
-
-
 
 def _table(title, rows, total_label):
     print(f"\n  {title}")
@@ -466,7 +427,7 @@ def main() -> int:
         return list(db.aql.execute(
             DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
 
-    def resync_gaps(label, projects, batch=""):
+    def resync_gaps(label, projects):
         """Recompute open_gaps for exactly `projects`. No-op on an empty list.
 
         The caller chooses the set, deliberately. A SWEEP may only touch what it swept:
@@ -480,8 +441,7 @@ def main() -> int:
             return
         before = {r["project"]: r["recorded"] for r in drifted()}
         written = list(db.aql.execute(
-            RESYNC_GAPS_AQL,
-            bind_vars={"projects": sorted(projects), "batch": batch}))
+            RESYNC_GAPS_AQL, bind_vars={"projects": sorted(projects)}))
         # Keyed by project, never zipped: RESYNC_GAPS_AQL has no SORT while
         # DRIFTED_GAPS_AQL does, so positional pairing can print one project's name
         # against another's previous counter.
@@ -596,23 +556,18 @@ def main() -> int:
             print(f"    {k}")
         if len(ancient) > 10:
             print(f"    … {len(ancient) - 10} more")
-        # The sweep writes to project_registry as well. Listing only alert keys made
-        # the second mutation invisible until it had already happened.
-        swept_projects = sorted({r["project"] for r in db.aql.execute(
-            "FOR a IN drift_alerts FILTER a._key IN @keys "
-            "COLLECT project = a.project_id RETURN { project }",
-            bind_vars={"keys": ancient})})
-        print(f"\n    …and project_registry.open_gaps would be recomputed for "
-              f"{len(swept_projects)} project(s): {', '.join(swept_projects)}")
+        print("\n    project_registry.open_gaps is NOT touched by a sweep — it is "
+              "left drifted\n    on purpose, and the run ends by naming the command "
+              "that fixes it.")
         return 0
 
     now = now_iso()
     batch = batch_id()
-    print("\n  REVERSAL (copy BOTH — the sweep makes two mutations; run in order):")
-    print(f"    1. {REVERSAL_ALERTS.format(batch=batch)}")
-    print(f"    2. {REVERSAL_GAPS.format(batch=batch, days=STALE_DAYS)}")
-    print("    Both are scoped to this batch by aged_out_batch, so they need no flags "
-          "and\n    cannot touch anything this run did not change.\n")
+    print(f"\n  REVERSAL (copy before continuing):\n    "
+          + REVERSAL_ALERTS.format(batch=batch))
+    print("    Scoped to this batch by aged_out_batch, so it needs no flags and cannot "
+          "touch\n    anything this run did not change. It is the WHOLE undo: a sweep "
+          "writes alerts\n    and nothing else.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "batch": batch, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
@@ -620,28 +575,14 @@ def main() -> int:
         print(f"    ({len(ancient) - len(updated)} row(s) were no longer open and were "
               "skipped — a concurrent /prd-sync moved them on)")
 
-    # Keep the denormalized counter honest in the same breath, for the swept projects
-    # ONLY. Read the project ids back from the rows rather than splitting the _key: a
-    # key is a sanitised project_id + req_id and a req_id can contain the separator
-    # (live example: "arango-ontoextract_-6.5 VCR playback").
-    #
-    # If this raises, the age-out above is already committed -- survivable precisely
-    # because --repair-gaps recomputes from the drift later.
-    try:
-        swept = [r["project"] for r in db.aql.execute(
-            "FOR a IN drift_alerts FILTER a._key IN @keys "
-            "COLLECT project = a.project_id RETURN { project }",
-            bind_vars={"keys": updated})]
-        resync_gaps("open_gaps", swept, batch)
-    except Exception as exc:  # noqa: BLE001
-        # Point at the batch-scoped statement, not the CLI: --repair-gaps re-derives
-        # its set from flags and the dormancy cutoff, so it can silently select
-        # nothing for exactly the rows this run just swept.
-        sys.stderr.write(
-            f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
-            "run this to finish (scoped to this batch):\n  "
-            + REVERSAL_GAPS.format(batch=batch, days=STALE_DAYS) + "\n")
-        return 1
+    # The counter is now stale for the swept projects, deliberately. Naming it and
+    # stopping is the whole point: see the note on the write path above.
+    drift_rows = drifted()
+    if drift_rows:
+        print(f"\n  project_registry.open_gaps is now drifted for "
+              f"{len(drift_rows)} dormant project(s). This sweep did not touch it.")
+        print(f"    Review and fix with: {repair_hint().replace(' --yes', '')}"
+              "   (then add --yes)")
     return 0
 
 
