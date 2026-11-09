@@ -45,7 +45,27 @@ ancient open alerts to status 'stale' — NOT deleted, NOT closed. A close asser
 the gap was fixed, which nobody has verified; 'stale' asserts only that nobody has
 looked in a long time, which is true and provable from the timestamps. Every aged
 row records aged_out_at / aged_out_reason / aged_out_by and keeps its original
-status in prior_status, so one AQL UPDATE reverses the whole batch.
+status in prior_status.
+
+A SWEEP WRITES ALERTS AND NOTHING ELSE, so its undo is one self-contained query,
+printed before anything is written and keyed on this batch's aged_out_batch (a
+timestamp plus random bytes -- aged_out_at is only second-granular, and two sweeps in
+the same second would share it). It needs no flags, cannot miss a row and cannot
+touch one the run did not change.
+
+That single-mutation rule is the result of getting it wrong repeatedly. The sweep
+used to also recompute the denormalized project_registry.open_gaps, and that second
+write was never cleanly reversible: the counter has no per-batch identity, so each
+attempt grew another mechanism -- a two-statement undo, then a batch-keyed stash --
+and each one had a hole (a second sweep of the same project clobbered the first
+batch's stash; the restore nulled the stash it consumed, so re-pasting the pair
+overwrote the value it had just restored). The counter is a DERIVED aggregate with
+two writers (/prd-sync's audit count, and this script's live-alert count), which is
+precisely the thing that does not belong inside an undoable batch.
+
+So a sweep now leaves the counter drifted on purpose and ends by naming the command
+that fixes it. --repair-gaps is the only path that writes open_gaps, it lists every
+change before committing, and a fleet-wide run must ask with --all.
 
 Writes touch shared prod data that four people now read, so --age-out additionally
 requires --yes and prints the exact reversal query before it runs.
@@ -57,7 +77,13 @@ Options:
     --stale-days N   age threshold for 'ancient' (default 60)
     --project P      restrict the report to one project
     --age-out        propose the stale transition (still a dry run without --yes)
-    --yes            actually write the stale transition
+    --all            allow --repair-gaps --yes to run fleet-wide (see the note there)
+    --repair-gaps    recompute project_registry.open_gaps wherever it disagrees with
+                     the live open-alert count, and nothing else. Idempotent, and
+                     symmetric: it corrects the counter whether a sweep left it too
+                     high or a reversal left it too low. Honours --project. Cannot be
+                     combined with --age-out.
+    --yes            actually write (required by --age-out and --repair-gaps)
 Exit: 0 ok · 1 failure/misconfiguration · 2 python-arango missing.
 """
 
@@ -65,6 +91,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -93,6 +120,8 @@ STALE_DAYS = int(_arg("--stale-days", "60"))
 ONLY_PROJECT = _arg("--project")
 AGE_OUT = "--age-out" in sys.argv
 CONFIRMED = "--yes" in sys.argv
+REPAIR_GAPS = "--repair-gaps" in sys.argv
+REPAIR_ALL = "--all" in sys.argv
 
 
 # ---------------------------------------------------------------- connection
@@ -117,6 +146,18 @@ def resolve(key: str, default: str = "") -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def batch_id() -> str:
+    """A key the undo can rely on to mean exactly one sweep.
+
+    aged_out_at is second-granular, so two sweeps landing in the same second -- a shell
+    loop over --project is the obvious way -- would share a key, and each run's printed
+    undo would revert the other's alerts and counters while claiming it "cannot touch
+    anything this run did not change". A random suffix makes the batch identity
+    independent of clock resolution.
+    """
+    return f"{now_iso()}#{secrets.token_hex(4)}"
 
 
 def connect():
@@ -206,19 +247,98 @@ FOR a IN drift_alerts FILTER a.status == "open"
   SORT n DESC RETURN { project, n }
 """
 
+# The status re-check is not redundant with ANCIENT_AQL. Selection and update are two
+# round trips, and a /prd-sync closing a gap in between would otherwise flip a CLOSED
+# alert to stale with prior_status "closed" while it keeps closed_at -- which
+# phase3_lifecycle.py's TTL still acts on. Re-checking makes the pair safe to interleave
+# with a concurrent sync; a row that moved on is simply skipped and reported.
 AGE_OUT_AQL = """
 FOR a IN drift_alerts FILTER a._key IN @keys
+  FILTER a.status == "open"
   UPDATE a WITH { status: "stale", prior_status: a.status,
                   aged_out_at: @now, aged_out_by: @by,
-                  aged_out_reason: @reason } IN drift_alerts
+                  aged_out_batch: @batch,
+                  aged_out_reason: @reason,
+                  // Clear any PREVIOUS reversal marker. Step 1 of the undo stamps
+                  // reverted_at and leaves aged_out_at in place, so a row swept,
+                  // reverted, then swept again would still carry reverted_at -- and
+                  // the freshly printed undo (which filters reverted_at == null) would
+                  // match zero rows, report nothing, and leave step 2 writing
+                  // open_gaps to agree with the un-undone state. A mixed batch would
+                  // be reverted silently and partially.
+                  reverted_at: null } IN drift_alerts
   RETURN NEW._key
 """
 
-REVERSAL = ("FOR a IN drift_alerts FILTER a.aged_out_at == \"{now}\" "
-            "UPDATE a WITH {{ status: a.prior_status, aged_out_at: null, "
-            "aged_out_by: null, aged_out_reason: null, prior_status: null }} "
-            "IN drift_alerts")
+# project_registry.open_gaps is a DENORMALIZED count, and only /prd-sync rewrites it.
+# Ageing alerts out without resyncing it leaves it wrong -- permanently, because these
+# projects were selected precisely for NOT running /prd-sync. It is read by verify.py
+# and by the visualizer's "open_gaps >= 1" orange rule, so a swept project would keep
+# flashing a gap count it no longer has.
+#
+# This selects the projects whose open_gaps DISAGREES with the live open-alert count.
+#
+# The first version keyed off `status == "stale"`, which was circular: step 1 of the
+# printed reversal is exactly what stops those rows being stale, so step 2 then found
+# nothing to recompute and left open_gaps at 0 against restored open alerts -- the
+# permanently-wrong counter the repair exists to prevent.
+#
+# Drift is the right basis because it is symmetric and self-describing. It catches the
+# counter being too HIGH (a sweep whose resync was missed -- the 2026-10-23 production
+# sweep of 53 rows ran before the resync existed) and too LOW (after a reversal), and
+# it needs no memory of how the drift arose. A repeat run selects nothing.
+# DORMANT PROJECTS ONLY, and that restriction is load-bearing rather than cautious.
+# open_gaps has two writers with two different definitions: /prd-sync sets it to the
+# latest audit's MISSING+PARTIAL count (SKILL.md), while this recomputes it from the
+# live open alerts. On a project that still syncs, those legitimately differ --
+# project-sentinel records 10 against 1 live open alert and synced 2026-10-01 -- so
+# "repairing" it would not be a repair at all: it would overwrite the audit's answer
+# with a different question's answer, and the next /prd-sync would put it back. Two
+# writers oscillating, and the claim that a repeat run selects nothing would be false.
+#
+# On a DORMANT project there is no contention: /prd-sync is not going to run, which is
+# both why the counter went stale and why this is the only thing that can fix it.
+DRIFTED_GAPS_AQL = """
+LET dormant = (FOR r IN project_registry
+               FILTER r.last_sync == null OR LEFT(r.last_sync, 10) < LEFT(@cutoff, 10)
+               RETURN r.project_id)
+FOR r IN project_registry
+  FILTER @proj == "" OR r.project_id == @proj
+  FILTER r.project_id IN dormant
+  LET live = LENGTH(FOR a IN drift_alerts
+                    FILTER a.project_id == r.project_id AND a.status == "open" RETURN 1)
+  LET recorded = r.open_gaps == null ? 0 : r.open_gaps
+  FILTER recorded != live
+  SORT r.project_id
+  RETURN { project: r.project_id, recorded, live }
+"""
 
+# Recomputes the denormalized counter from the live open alerts. The ONLY place
+# open_gaps is written by this script, reached only from --repair-gaps -- never from
+# a sweep. See the note above --age-out's write path for why.
+RESYNC_GAPS_AQL = """
+FOR p IN @projects
+  LET live = LENGTH(FOR a IN drift_alerts
+                    FILTER a.project_id == p AND a.status == "open" RETURN 1)
+  FOR r IN project_registry FILTER r.project_id == p
+    UPDATE r WITH { open_gaps: live } IN project_registry
+    RETURN { project: p, open_gaps: live }
+"""
+
+
+# The status guard is the same race AGE_OUT_AQL guards, in the other direction and with
+# worse consequences. The undo is pasted some time after the sweep -- deliberately so --
+# and a /prd-sync closing one of these rows in between would otherwise see it flipped
+# back to "open" while it keeps closed_at. The TTL index on drift_alerts.closed_at
+# (scripts/phase3_lifecycle.py, 90 days) does not look at status, so the resurrected
+# alert is then silently DELETED. Restoring only rows that are still stale means a row
+# that moved on is left alone.
+REVERSAL_ALERTS = (
+    'FOR a IN drift_alerts FILTER a.aged_out_batch == "{batch}" '
+    'AND a.reverted_at == null '
+    'AND a.status == "stale" '
+    'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
+    'IN drift_alerts')
 
 def _table(title, rows, total_label):
     print(f"\n  {title}")
@@ -286,6 +406,129 @@ def main() -> int:
         if len(revived) > 8:
             print(f"        … {len(revived) - 8} more project(s)")
 
+    def repair_hint():
+        """The exact --repair-gaps command for the current scope.
+
+        Assembled in one place because each printed hint had been dropping a different
+        flag: --project first, then --stale-days, and then --all, which this change
+        made mandatory for an unscoped run -- so the instruction exited 1 at the
+        fleet-wide guard. Every flag that changes the selection, or the right to run
+        at all, belongs here.
+        """
+        parts = ["triage.py --repair-gaps"]
+        parts.append(f"--project {ONLY_PROJECT}" if ONLY_PROJECT else "--all")
+        if STALE_DAYS != 60:
+            parts.append(f"--stale-days {STALE_DAYS}")
+        parts.append("--yes")
+        return " ".join(parts)
+
+    def drifted():
+        """Projects whose open_gaps disagrees with the live count, honouring --project."""
+        return list(db.aql.execute(
+            DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+
+    def resync_gaps(label, projects, snapshot=None):
+        """Recompute open_gaps for exactly `projects`. No-op on an empty list.
+
+        The caller chooses the set, deliberately. A SWEEP may only touch what it swept:
+        using the full drifted set meant `--age-out` rewrote the registry for projects
+        the dormancy gate had just protected and printed under "NOT ancient", which the
+        dry run never mentions and the printed reversal cannot undo. Repairing
+        unrelated drift is what --repair-gaps is for, and it says so before it writes.
+        """
+        if not projects:
+            print(f"  {label}: nothing to recompute.")
+            return
+        before = {r["project"]: r["recorded"] for r in (snapshot or drifted())}
+        written = list(db.aql.execute(
+            RESYNC_GAPS_AQL, bind_vars={"projects": sorted(projects)}))
+        # Keyed by project, never zipped: RESYNC_GAPS_AQL has no SORT while
+        # DRIFTED_GAPS_AQL does, so positional pairing can print one project's name
+        # against another's previous counter.
+        by_project = {r["project"]: r["open_gaps"] for r in written}
+        print(f"  {label}: open_gaps recomputed for {len(by_project)} project(s): "
+              + ", ".join(f"{p} {before.get(p, '?')}->{n}"
+                          for p, n in sorted(by_project.items())))
+
+    if REPAIR_GAPS:
+        if AGE_OUT:
+            sys.stderr.write(
+                "error: --repair-gaps and --age-out do nothing useful together — the "
+                "repair would run and the sweep would be silently skipped. Run them as "
+                "two commands.\n")
+            return 1
+        if CONFIRMED and not ONLY_PROJECT and not REPAIR_ALL:
+            sys.stderr.write(
+                "error: --repair-gaps --yes with no --project rewrites open_gaps for "
+                "EVERY drifted dormant project, not only ones this tool swept. Their "
+                "recorded value came from a /prd-sync audit (MISSING+PARTIAL) and this "
+                "writes the live open-alert count instead -- a different definition, "
+                "and nothing restores the old one. Dormancy removes the oscillation, "
+                "not the definitional mismatch.\n"
+                "Re-run with --project <id> for one project, or --all if a fleet-wide "
+                "rewrite is genuinely what you want (the dry run lists every change "
+                "first).\n")
+            return 1
+        rows = drifted()
+        # An orphaned project -- alerts but no project_registry row -- is an
+        # anomaly in its own right, so it is reported WHENEVER it exists, not only
+        # when nothing was compared. Nesting it under the empty-result branch made
+        # it unreachable fleet-wide (that branch is never taken when any dormant
+        # project exists), which is the same reachability defect the `active`
+        # keying had.
+        unregistered = list(db.aql.execute(
+            "LET known = (FOR r IN project_registry RETURN r.project_id) "
+            "FOR a IN drift_alerts "
+            "FILTER @proj == '' OR a.project_id == @proj "
+            "FILTER a.project_id NOT IN known "
+            "COLLECT p = a.project_id RETURN p",
+            bind_vars={"proj": ONLY_PROJECT}))
+        if unregistered:
+            print(f"    note: {len(unregistered)} project(s) in scope have alerts "
+                  "but no project_registry row, so they have no counter to repair "
+                  "either way:\n      " + ", ".join(sorted(unregistered)))
+        if not CONFIRMED:
+            print(f"\n  --repair-gaps: DRY RUN — {len(rows)} project(s) have a drifted "
+                  "open_gaps:")
+            for r in rows:
+                print(f"    {r['project']}: recorded {r['recorded']} -> live {r['live']}")
+            if not rows:
+                # "No drift" and "nothing was eligible to compare" are different
+                # answers, and reporting the second as the first claims a consistency
+                # that was never checked. Keyed on what WAS compared -- keying it on
+                # the EXCLUDED set got the clean case backwards, because active and
+                # dormant partition project_registry.
+                compared = list(db.aql.execute(
+                    "LET cutoff = @cutoff "
+                    "FOR r IN project_registry "
+                    "FILTER @proj == '' OR r.project_id == @proj "
+                    "FILTER r.last_sync == null OR "
+                    "LEFT(r.last_sync, 10) < LEFT(cutoff, 10) "
+                    "RETURN r.project_id",
+                    bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+                if compared:
+                    print(f"    (none — open_gaps matches the live count for all "
+                          f"{len(compared)} dormant project(s) in scope)")
+                else:
+                    active = list(db.aql.execute(
+                        "FOR r IN project_registry "
+                        "FILTER @proj == '' OR r.project_id == @proj "
+                        "FILTER r.last_sync != null AND "
+                        "LEFT(r.last_sync, 10) >= LEFT(@cutoff, 10) "
+                        "RETURN r.project_id",
+                        bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+                    why = (f"{len(active)} have synced within {STALE_DAYS}d, so "
+                           "/prd-sync owns their counter: " + ", ".join(sorted(active))
+                           ) if active else ""
+                    print("    (none compared — nothing in scope was eligible"
+                          + (":\n     " + why if why else "") + ")")
+            print(f"    To commit: {repair_hint()}")
+            return 0
+        print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
+              "is modified.")
+        resync_gaps("--repair-gaps", [r["project"] for r in rows], snapshot=rows)
+        return 0
+
     if not AGE_OUT:
         print("\n  Nothing was written. To cap the alert queue on purpose, re-run with "
               "--age-out (and --yes to commit).")
@@ -293,6 +536,14 @@ def main() -> int:
 
     if not ancient:
         print("\n  --age-out: nothing older than the threshold. Nothing to do.")
+        # Still offer the repair: a previous sweep may have left the counter wrong,
+        # and with nothing left to age out this branch would otherwise be the only
+        # one reachable and would do nothing forever.
+        drift_rows = drifted()
+        if drift_rows:
+            print(f"    But {len(drift_rows)} project(s) have a drifted open_gaps "
+                  "counter.\n    Review with: "
+                  + repair_hint().replace(" --yes", "") + "   (then add --yes)")
         return 0
 
     reason = f"no review in {STALE_DAYS}+ days; aged out by scripts/triage.py"
@@ -306,13 +557,47 @@ def main() -> int:
             print(f"    {k}")
         if len(ancient) > 10:
             print(f"    … {len(ancient) - 10} more")
+        print("\n    project_registry.open_gaps is NOT touched by a sweep — it is "
+              "left drifted\n    on purpose, and the run ends by naming the command "
+              "that fixes it.")
         return 0
 
     now = now_iso()
-    print(f"\n  REVERSAL (copy this before continuing):\n    {REVERSAL.format(now=now)}\n")
+    batch = batch_id()
+    print(f"\n  REVERSAL (copy before continuing):\n    "
+          + REVERSAL_ALERTS.format(batch=batch))
+    print("    Scoped to this batch by aged_out_batch, so it needs no flags and cannot "
+          "touch\n    anything this run did not change. It is the WHOLE undo of the "
+          "SWEEP: a sweep\n    writes alerts and nothing else.")
+    print("    If you have since run --repair-gaps, run it once more after this — the "
+          "counter\n    was recomputed against the swept state and needs recomputing "
+          "against the restored one.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
-        "keys": ancient, "now": now, "by": user, "reason": reason}))
+        "keys": ancient, "now": now, "batch": batch, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
+    if len(updated) != len(ancient):
+        print(f"    ({len(ancient) - len(updated)} row(s) were no longer open and were "
+              "skipped — a concurrent /prd-sync moved them on)")
+
+    # The counter is now stale for the projects THIS sweep touched, deliberately.
+    # Naming it and stopping is the whole point: see the note on the write path above.
+    # Scoped to the swept projects, because fleet-wide drift includes dormant projects
+    # with a pre-existing /prd-sync definitional mismatch that this run never touched --
+    # attributing those to the sweep overstates what it did.
+    swept = {r["project"] for r in db.aql.execute(
+        "FOR a IN drift_alerts FILTER a._key IN @keys "
+        "COLLECT project = a.project_id RETURN { project }",
+        bind_vars={"keys": updated})}
+    mine = [r for r in drifted() if r["project"] in swept]
+    if mine:
+        print(f"\n  project_registry.open_gaps is now drifted for "
+              f"{len(mine)} project(s) this sweep touched. The sweep did not change it.")
+        for r in mine[:8]:
+            print(f"    {r['project']}: recorded {r['recorded']} -> live {r['live']}")
+        if len(mine) > 8:
+            print(f"    … {len(mine) - 8} more")
+        print(f"    Review and fix with: {repair_hint().replace(' --yes', '')}"
+              "   (then add --yes)")
     return 0
 
 

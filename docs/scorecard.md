@@ -433,9 +433,39 @@ only **2** alerts are contradicted (a closed row exists for the same
 
 `--age-out` moves ancient alerts to `status: "stale"` — deliberately *not* `closed`,
 because closing asserts the gap was fixed and nobody has verified that, while stale
-asserts only that nobody has looked in 60+ days, which the timestamps prove. Reversible
-by one UPDATE, which the script prints before writing. **Not run.** It mutates 105 shared
-documents and the judgement about which projects are dormant belongs to their owner.
+asserts only that nobody has looked in 60+ days, which the timestamps prove.
+
+> **Updated 2026-10-28.** Two statements here were true when written and are no longer.
+>
+> **It was run.** On 2026-10-23, 53 alerts across 8 dormant projects moved to `stale`
+> and the open count fell 188 → 135. (It took a schema fix first: `status` was a closed
+> enum in this repo's own `setup_schema.py` and `"stale"` was refused with ERR 1620 —
+> the database caught it and nothing was written.)
+>
+> **It is reversible by one UPDATE — but only because the sweep was cut back to one
+> mutation.** For several iterations the sweep also recomputed the denormalized
+> `project_registry.open_gaps`, and that second write was never cleanly undoable. Ten
+> review rounds on this change found a defect in that one area eight times running:
+> recomputing on undo discarded any drift that predated the sweep; keying the undo on a
+> second-granular timestamp meant two sweeps in the same second reverted each other;
+> a batch-keyed stash had one slot per row, so a second sweep clobbered the first
+> batch's stash, and the restore nulled the stash it consumed so re-pasting overwrote
+> what it had just restored.
+>
+> The lesson generalises past this script: **`open_gaps` is a derived aggregate with
+> two writers** — `/prd-sync` sets it from its audit's MISSING+PARTIAL count, the repair
+> from the live open-alert count — and a value like that does not belong inside an
+> undoable batch at all. So a sweep now writes alerts and nothing else. Its undo is one
+> self-contained statement keyed to a unique batch id stamped on the swept rows, needing
+> no flags and unable to touch anything that run did not change. The counter is left
+> drifted on purpose and the run ends by naming `--repair-gaps`, which lists every
+> change before committing and requires `--all` to go fleet-wide.
+>
+> `--repair-gaps` is restricted to dormant projects on purpose. `open_gaps` has two
+> writers with different definitions — `/prd-sync` sets it from its audit's
+> MISSING+PARTIAL count, the repair recomputes it from live open alerts — and on a
+> still-syncing project those legitimately differ, so "repairing" it would overwrite
+> the audit's answer and the next sync would put it back.
 
 **5. "Why don't the new readers come back" had an answer in the data.**
 Round 7 proposed asking them. The search log answers it without asking, and corrects two

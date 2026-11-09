@@ -258,6 +258,12 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
                 _rule("status", "string", "=", "open", "#e53e3e"),
                 _rule("status", "string", "=", "undocumented", "#d69e2e"),
                 _rule("status", "string", "=", "closed", "#a39fa1"),
+                # "stale" (scripts/triage.py --age-out): neither live work nor fixed.
+                # Dimmer than closed on purpose -- closed is an outcome someone
+                # produced, stale is an absence of attention. Without a rule these
+                # would fall through to the collection's base colour and read as
+                # ordinary nodes, which is the opposite of what ageing them out is for.
+                _rule("status", "string", "=", "stale", "#6b6668"),
             ],
         },
         # The other two status-bearing vertex collections (values from live census
@@ -299,7 +305,8 @@ def build_theme(graph_id: str, is_default: bool) -> dict:
     }
     return {
         "graphId": graph_id, "name": THEME_NAME,
-        "description": "Shared-memory graph. Alerts: red=OPEN, amber=undocumented, grey=closed. "
+        "description": "Shared-memory graph. Alerts: red=OPEN, amber=undocumented, "
+                       "grey=closed, dim grey=stale (aged out, not fixed). "
                        "Patches: amber=proposed, green=accepted. Observations: amber=unprocessed, "
                        "green=promoted, grey=acknowledged. Patterns: green=reused, "
                        "gold=high-importance. NOTE: on LARGE canvases a visualizer bug leaves "
