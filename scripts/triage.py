@@ -62,6 +62,7 @@ Options:
     --stale-days N   age threshold for 'ancient' (default 60)
     --project P      restrict the report to one project
     --age-out        propose the stale transition (still a dry run without --yes)
+    --all            allow --repair-gaps --yes to run fleet-wide (see the note there)
     --repair-gaps    recompute project_registry.open_gaps wherever it disagrees with
                      the live open-alert count, and nothing else. Idempotent, and
                      symmetric: it corrects the counter whether a sweep left it too
@@ -75,6 +76,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -104,6 +106,7 @@ ONLY_PROJECT = _arg("--project")
 AGE_OUT = "--age-out" in sys.argv
 CONFIRMED = "--yes" in sys.argv
 REPAIR_GAPS = "--repair-gaps" in sys.argv
+REPAIR_ALL = "--all" in sys.argv
 
 
 # ---------------------------------------------------------------- connection
@@ -128,6 +131,18 @@ def resolve(key: str, default: str = "") -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def batch_id() -> str:
+    """A key the undo can rely on to mean exactly one sweep.
+
+    aged_out_at is second-granular, so two sweeps landing in the same second -- a shell
+    loop over --project is the obvious way -- would share a key, and each run's printed
+    undo would revert the other's alerts and counters while claiming it "cannot touch
+    anything this run did not change". A random suffix makes the batch identity
+    independent of clock resolution.
+    """
+    return f"{now_iso()}#{secrets.token_hex(4)}"
 
 
 def connect():
@@ -227,6 +242,7 @@ FOR a IN drift_alerts FILTER a._key IN @keys
   FILTER a.status == "open"
   UPDATE a WITH { status: "stale", prior_status: a.status,
                   aged_out_at: @now, aged_out_by: @by,
+                  aged_out_batch: @batch,
                   aged_out_reason: @reason,
                   // Clear any PREVIOUS reversal marker. Step 1 of the undo stamps
                   // reverted_at and leaves aged_out_at in place, so a row swept,
@@ -312,7 +328,8 @@ FOR p IN @projects
 # alert is then silently DELETED. Restoring only rows that are still stale means a row
 # that moved on is left alone.
 REVERSAL_ALERTS = (
-    'FOR a IN drift_alerts FILTER a.aged_out_at == "{now}" AND a.reverted_at == null '
+    'FOR a IN drift_alerts FILTER a.aged_out_batch == "{batch}" '
+    'AND a.reverted_at == null '
     'AND a.status == "stale" '
     'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
     'IN drift_alerts')
@@ -329,7 +346,7 @@ REVERSAL_GAPS = (
     'LET dormant = (FOR r IN project_registry '
     'FILTER r.last_sync == null OR LEFT(r.last_sync, 10) < LEFT(cutoff, 10) '
     'RETURN r.project_id) '
-    'LET touched = (FOR a IN drift_alerts FILTER a.aged_out_at == "{now}" '
+    'LET touched = (FOR a IN drift_alerts FILTER a.aged_out_batch == "{batch}" '
     'COLLECT p = a.project_id RETURN p) '
     'FOR p IN touched FILTER p IN dormant '
     'LET live = LENGTH(FOR a IN drift_alerts '
@@ -441,40 +458,47 @@ def main() -> int:
                 "repair would run and the sweep would be silently skipped. Run them as "
                 "two commands.\n")
             return 1
+        if CONFIRMED and not ONLY_PROJECT and not REPAIR_ALL:
+            sys.stderr.write(
+                "error: --repair-gaps --yes with no --project rewrites open_gaps for "
+                "EVERY drifted dormant project, not only ones this tool swept. Their "
+                "recorded value came from a /prd-sync audit (MISSING+PARTIAL) and this "
+                "writes the live open-alert count instead -- a different definition, "
+                "and nothing restores the old one. Dormancy removes the oscillation, "
+                "not the definitional mismatch.\n"
+                "Re-run with --project <id> for one project, or --all if a fleet-wide "
+                "rewrite is genuinely what you want (the dry run lists every change "
+                "first).\n")
+            return 1
         rows = drifted()
         if not CONFIRMED:
             print(f"\n  --repair-gaps: DRY RUN — {len(rows)} project(s) have a drifted "
                   "open_gaps:")
             for r in rows:
                 print(f"    {r['project']}: recorded {r['recorded']} -> live {r['live']}")
+            # An orphaned project -- alerts but no project_registry row -- is an
+            # anomaly in its own right, so it is reported WHENEVER it exists, not only
+            # when nothing was compared. Nesting it under the empty-result branch made
+            # it unreachable fleet-wide (that branch is never taken when any dormant
+            # project exists), which is the same reachability defect the `active`
+            # keying had.
+            unregistered = list(db.aql.execute(
+                "LET known = (FOR r IN project_registry RETURN r.project_id) "
+                "FOR a IN drift_alerts "
+                "FILTER @proj == '' OR a.project_id == @proj "
+                "FILTER a.project_id NOT IN known "
+                "COLLECT p = a.project_id RETURN p",
+                bind_vars={"proj": ONLY_PROJECT}))
+            if unregistered:
+                print(f"    note: {len(unregistered)} project(s) in scope have alerts "
+                      "but no project_registry row, so they have no counter to repair "
+                      "either way:\n      " + ", ".join(sorted(unregistered)))
             if not rows:
-                # "No drift" and "excluded because the project still syncs" are
-                # different answers, and reporting the second as the first claims a
-                # consistency that was never checked.
-                active = list(db.aql.execute(
-                    "FOR r IN project_registry "
-                    "FILTER @proj == '' OR r.project_id == @proj "
-                    "FILTER r.last_sync != null AND "
-                    "LEFT(r.last_sync, 10) >= LEFT(@cutoff, 10) "
-                    "RETURN r.project_id",
-                    bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
-                # Both DRIFTED_GAPS_AQL and the probe above iterate project_registry,
-                # so a project with alerts but NO registry row is compared by neither
-                # and would otherwise fall through to "all clean".
-                unregistered = list(db.aql.execute(
-                    "LET known = (FOR r IN project_registry RETURN r.project_id) "
-                    "FOR a IN drift_alerts "
-                    "FILTER @proj == '' OR a.project_id == @proj "
-                    "FILTER a.project_id NOT IN known "
-                    "COLLECT p = a.project_id RETURN p",
-                    bind_vars={"proj": ONLY_PROJECT}))
-                # Key off what WAS compared, never off what was excluded. Keying off
-                # `active` was wrong in the one case that matters: active and dormant
-                # partition project_registry, so a fleet-wide run almost always has
-                # active projects, and a genuinely clean result was reported as "none
-                # compared" -- the same false claim this block exists to prevent, just
-                # inverted. It also made the unregistered branch unreachable without
-                # --project.
+                # "No drift" and "nothing was eligible to compare" are different
+                # answers, and reporting the second as the first claims a consistency
+                # that was never checked. Keyed on what WAS compared -- keying it on
+                # the EXCLUDED set got the clean case backwards, because active and
+                # dormant partition project_registry.
                 compared = list(db.aql.execute(
                     "LET cutoff = @cutoff "
                     "FOR r IN project_registry "
@@ -487,17 +511,18 @@ def main() -> int:
                     print(f"    (none — open_gaps matches the live count for all "
                           f"{len(compared)} dormant project(s) in scope)")
                 else:
-                    why = []
-                    if active:
-                        why.append(f"{len(active)} have synced within {STALE_DAYS}d, so "
-                                   "/prd-sync owns their counter: "
-                                   + ", ".join(sorted(active)))
-                    if unregistered:
-                        why.append(f"{len(unregistered)} have alerts but no "
-                                   "project_registry row, so there is no counter to "
-                                   "repair: " + ", ".join(sorted(unregistered)))
+                    active = list(db.aql.execute(
+                        "FOR r IN project_registry "
+                        "FILTER @proj == '' OR r.project_id == @proj "
+                        "FILTER r.last_sync != null AND "
+                        "LEFT(r.last_sync, 10) >= LEFT(@cutoff, 10) "
+                        "RETURN r.project_id",
+                        bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
+                    why = (f"{len(active)} have synced within {STALE_DAYS}d, so "
+                           "/prd-sync owns their counter: " + ", ".join(sorted(active))
+                           ) if active else ""
                     print("    (none compared — nothing in scope was eligible"
-                          + (":\n     " + "\n     ".join(why) if why else "") + ")")
+                          + (":\n     " + why if why else "") + ")")
             print("    Add --yes to commit.")
             return 0
         print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
@@ -546,13 +571,14 @@ def main() -> int:
         return 0
 
     now = now_iso()
+    batch = batch_id()
     print("\n  REVERSAL (copy BOTH — the sweep makes two mutations; run in order):")
-    print(f"    1. {REVERSAL_ALERTS.format(now=now)}")
-    print(f"    2. {REVERSAL_GAPS.format(now=now, days=STALE_DAYS)}")
+    print(f"    1. {REVERSAL_ALERTS.format(batch=batch)}")
+    print(f"    2. {REVERSAL_GAPS.format(batch=batch, days=STALE_DAYS)}")
     print("    Both are scoped to this batch by aged_out_at, so they need no flags "
           "and\n    cannot touch anything this run did not change.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
-        "keys": ancient, "now": now, "by": user, "reason": reason}))
+        "keys": ancient, "now": now, "batch": batch, "by": user, "reason": reason}))
     print(f"  aged out {len(updated)} alert(s) at {now}")
     if len(updated) != len(ancient):
         print(f"    ({len(ancient) - len(updated)} row(s) were no longer open and were "
@@ -578,7 +604,7 @@ def main() -> int:
         sys.stderr.write(
             f"\nwarning: alerts were aged out but open_gaps was NOT recomputed: {exc}\n"
             "run this to finish (scoped to this batch):\n  "
-            + REVERSAL_GAPS.format(now=now, days=STALE_DAYS) + "\n")
+            + REVERSAL_GAPS.format(batch=batch, days=STALE_DAYS) + "\n")
         return 1
     return 0
 

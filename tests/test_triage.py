@@ -376,7 +376,7 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
     def test_repair_gaps_also_requires_explicit_confirmation(self):
         """It writes to shared data, so it gets the same gate as --age-out."""
         idx = self.src.index("if REPAIR_GAPS:")
-        branch = self.src[idx:idx + 900]
+        branch = self.src[idx:idx + 2200]
         self.assertIn("if not CONFIRMED:", branch)
         self.assertIn("DRY RUN", branch)
 
@@ -396,7 +396,7 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         for name in ("REVERSAL_ALERTS", "REVERSAL_GAPS"):
             stmt = re.search(rf"{name} = \((.*?)\)\n", self.src, re.DOTALL)
             self.assertTrue(stmt, f"{name} not found")
-            self.assertIn("aged_out_at", stmt.group(1),
+            self.assertIn("aged_out_batch", stmt.group(1),
                           f"{name} is not scoped to the batch")
         self.assertNotRegex(
             self.src, r"\d\. triage\.py --repair-gaps",
@@ -452,6 +452,41 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
                       "the cutoff is baked at print time rather than evaluated when "
                       "the statement runs")
 
+    def test_the_batch_key_does_not_depend_on_clock_resolution(self):
+        """aged_out_at is second-granular, so it cannot identify a sweep.
+
+        Two sweeps landing in the same second -- a shell loop over --project is the
+        obvious way -- would share the key, and each run's printed undo would revert
+        the other's alerts and counters while claiming it "cannot touch anything this
+        run did not change".
+        """
+        self.assertIn("def batch_id()", self.src,
+                      "no batch identity independent of the clock")
+        self.assertRegex(self.src, r"secrets\.token_hex",
+                         "the batch key has no random component, so two sweeps in the "
+                         "same second collide")
+        age_out = _block(self.src, "AGE_OUT_AQL")
+        self.assertIn("aged_out_batch: @batch", age_out,
+                      "the sweep does not stamp the batch id it printed")
+        for name in ("REVERSAL_ALERTS", "REVERSAL_GAPS"):
+            stmt = re.search(rf"{name} = \((.*?)\)\n", self.src, re.DOTALL).group(1)
+            self.assertIn("aged_out_batch", stmt,
+                          f"{name} still keys on the second-granular timestamp")
+
+    def test_a_fleetwide_repair_must_be_asked_for_explicitly(self):
+        """--repair-gaps --yes with no scope rewrites open_gaps for every drifted
+        dormant project, not only ones this tool swept. Their recorded value came from
+        a /prd-sync audit (MISSING+PARTIAL) and this writes the live open-alert count
+        -- a different definition, which nothing restores. Dormancy removes the
+        oscillation, not the definitional mismatch."""
+        self.assertIn('REPAIR_ALL = "--all" in sys.argv', self.src,
+                      "no explicit opt-in for a fleet-wide rewrite")
+        self.assertIn("if CONFIRMED and not ONLY_PROJECT and not REPAIR_ALL:", self.src,
+                      "a fleet-wide --repair-gaps --yes runs without being asked for")
+        idx = self.src.index("if CONFIRMED and not ONLY_PROJECT")
+        self.assertIn("definitional mismatch", self.src[idx:idx + 1000],
+                      "the refusal does not say WHY a fleet-wide rewrite is risky")
+
     def test_the_reversal_preserves_the_batch_marker(self):
         """Step 2 finds the batch by aged_out_at, so step 1 must not clear it."""
         stmt = re.search(r"REVERSAL_ALERTS = \((.*?)\)\n", self.src, re.DOTALL).group(1)
@@ -471,7 +506,7 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         # Points at the BATCH-SCOPED statement, not the CLI: --repair-gaps re-derives
         # its set from flags and the dormancy cutoff, so it can select nothing for
         # exactly the rows the failed run just swept.
-        self.assertIn("REVERSAL_GAPS.format(now=now, days=STALE_DAYS)", after,
+        self.assertIn("REVERSAL_GAPS.format(batch=batch, days=STALE_DAYS)", after,
                       "the failure hint sends the operator back to the CLI, which may "
                       "not select the rows this run swept")
         self.assertIn("scoped to this batch", after)
@@ -527,9 +562,18 @@ class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
                       "from 'nothing was eligible to compare'")
         # A project with alerts but no registry row is compared by neither
         # DRIFTED_GAPS_AQL nor the active probe, so it must be named too.
-        self.assertIn("project_registry row, so there is no counter to", self.src,
-                      "a project with alerts but no registry row still falls through "
-                      "to the 'all clean' message")
+        self.assertIn("but no project_registry row", self.src,
+                      "a project with alerts but no registry row is never reported")
+        # It must be reported WHENEVER it exists, not only when nothing was compared:
+        # nesting it under the empty-result branch made it unreachable fleet-wide,
+        # because that branch is never taken when any dormant project exists.
+        # Anchored INSIDE the --repair-gaps branch: resync_gaps() contains its own
+        # earlier "if not rows:", which a whole-file index() finds instead.
+        branch = self.src[self.src.index("if REPAIR_GAPS:"):]
+        self.assertLess(
+            branch.index("if unregistered:"), branch.index("if not rows:"),
+            "the orphaned-project note is nested inside the empty-result branch, so a "
+            "fleet-wide run never reaches it")
 
     def test_the_empty_result_is_judged_on_what_was_compared(self):
         """Keying off what was EXCLUDED got the one case that matters backwards.

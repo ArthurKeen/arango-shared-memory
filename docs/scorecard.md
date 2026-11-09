@@ -445,10 +445,17 @@ asserts only that nobody has looked in 60+ days, which the timestamps prove.
 > **It is no longer reversible by one UPDATE.** The sweep makes *two* mutations: the
 > alert status, and the denormalized `project_registry.open_gaps`, which only
 > `/prd-sync` otherwise rewrites — and these projects were chosen precisely for not
-> running it, so a missed repair would have been permanent. A full undo is the printed
-> UPDATE **plus** `triage.py --repair-gaps --yes`, and the script now prints both
-> together. An operator who followed the older wording would have restored 53 alerts
-> and left 8 counters at zero.
+> running it, so a missed repair would have been permanent. The script prints **two
+> self-contained AQL statements** before it writes anything; run both, in order.
+>
+> They are not "re-run the CLI with the right flags", and that distinction was learned
+> the hard way. The flag-based version kept losing scope — first `--project` (rewriting
+> counters fleet-wide after a scoped sweep), then `--stale-days` (a sweep at a 30-day
+> threshold is not dormant at the default 60, so the repair selected nothing and left
+> the counter at zero permanently) — all the same defect: an undo that re-derives its
+> own batch will keep getting the batch wrong. Both statements are keyed to a unique
+> batch id stamped on the swept rows, so no flag can be forgotten and nothing outside
+> that sweep can be touched.
 >
 > `--repair-gaps` is restricted to dormant projects on purpose. `open_gaps` has two
 > writers with different definitions — `/prd-sync` sets it from its audit's
