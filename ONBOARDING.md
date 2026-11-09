@@ -60,7 +60,7 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
 {
   "arangodb-memory-mcp": {
     "command": "bash",
-    "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/python main.py"],
+    "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/arangodb-mcp"],
     "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
     "env": {
       "ARANGO_HOSTS": "https://prod.demo.pilot.arango.ai",
@@ -68,6 +68,8 @@ Fill in `<you>`, the **credentials you were given out-of-band**, and **your own*
       "ARANGO_ROOT_PASSWORD": "<your shared-cluster password — DO NOT COMMIT>",
       "ARANGO_DEFAULT_DB_NAME": "memory",
       "ARANGO_VERIFY_SSL": "true",
+      "MCP_PROFILE": "developer",
+      "MCP_TOOLSETS": "graph,search",
       "OPENAI_API_KEY": "sk-...your own key...",
       "EMBEDDING_MODEL": "text-embedding-3-small"
     }
@@ -79,10 +81,17 @@ Then **reload Cursor / restart Claude Code** so the tools load.
 
 > **A wrong launch line is easy to miss** — the memory tools simply aren't there, because the
 > skills fail open (the client's MCP logs show the real error). The line matches the server's
-> `main` branch: Poetry, `package-mode = false`, `main.py` at the root. The `pyproject.toml`
-> there declares an `arangodb-mcp` script, but Poetry never creates it in that mode, so launch
-> `main.py` with the venv's Python. If `.venv/` is missing, see the Troubleshooting table in
-> `setup.md`.
+> `main` branch (v2.0.0+): the server is an installable `src/arangodb_mcp` package and
+> `poetry install` creates the `arangodb-mcp` entry point in `.venv/bin/`. The old top-level
+> `main.py` was **removed** in v2.0.0 — a config still launching `.venv/bin/python main.py` fails
+> with `can't open file '.../main.py': [Errno 2] No such file or directory`; switch it to
+> `.venv/bin/arangodb-mcp` (see the server's `CHANGELOG.md`). If `.venv/` or
+> `.venv/bin/arangodb-mcp` is missing, re-run `poetry install` in the server repo, then see the
+> Troubleshooting table in `setup.md`.
+>
+> **Don't drop `MCP_PROFILE`.** The server defaults to `readonly`, which leaves out every memory
+> tool (`pattern-search`, `save-pattern`, …) while still starting cleanly, so nothing looks wrong
+> in the session. `developer` + `graph,search` is what the shared memory needs.
 >
 > If your tools vanish after a `git pull` of the server, check the launch line first.
 
