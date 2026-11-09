@@ -48,9 +48,11 @@ row records aged_out_at / aged_out_reason / aged_out_by and keeps its original
 status in prior_status. The sweep makes TWO mutations -- the alert status and the
 denormalized project_registry.open_gaps -- so the undo is two queries, both printed
 before anything is written. Both are SELF-CONTAINED and keyed on this batch's
-aged_out_at, so they need no flags, cannot miss a project and cannot touch one the
-run did not change. (Step 1 leaves aged_out_at in place and stamps reverted_at,
-which is what lets step 2 still identify the batch.)
+aged_out_batch -- a timestamp plus random bytes, because aged_out_at is only
+second-granular and two sweeps in the same second would share it. They need no flags,
+cannot miss a project and cannot touch one the run did not change. (Step 1 stamps
+reverted_at and leaves aged_out_batch in place, which lets step 2 identify the batch;
+step 2 restores the counter the sweep stashed in prior_open_gaps.)
 
 Writes touch shared prod data that four people now read, so --age-out additionally
 requires --yes and prints the exact reversal query before it runs.
@@ -298,12 +300,27 @@ FOR r IN project_registry
   RETURN { project: r.project_id, recorded, live }
 """
 
+# @batch is the sweep's batch id, or "" for a standalone --repair-gaps.
+#
+# When a sweep calls this, it stashes the PRE-SWEEP counter in prior_open_gaps keyed by
+# the batch. Alerts get prior_status for exactly this reason and the registry counter
+# previously got nothing, so the printed undo could not restore a counter that was
+# ALREADY drifted before the sweep: dormant project recorded 14 / live 9, the sweep
+# writes 0, the undo recomputes 9, and the 14 is gone -- an irreversible overwrite of an
+# audit-derived value, which is the very thing --repair-gaps --yes is gated behind --all
+# to avoid. A standalone repair stashes nothing, because there is no batch to undo and
+# the operator was shown every change first.
 RESYNC_GAPS_AQL = """
 FOR p IN @projects
   LET live = LENGTH(FOR a IN drift_alerts
                     FILTER a.project_id == p AND a.status == "open" RETURN 1)
   FOR r IN project_registry FILTER r.project_id == p
-    UPDATE r WITH { open_gaps: live } IN project_registry
+    UPDATE r WITH MERGE({ open_gaps: live },
+                        @batch == "" ? {} :
+                        { prior_open_gaps: { batch: @batch,
+                                             value: r.open_gaps == null ? 0
+                                                                        : r.open_gaps } })
+      IN project_registry
     RETURN { project: p, open_gaps: live }
 """
 
@@ -316,7 +333,7 @@ FOR p IN @projects
 # Every one of those was the same defect: the undo had to re-derive the batch from
 # flags instead of knowing it.
 #
-# Keying both statements on aged_out_at removes the class. The batch identifies itself,
+# Keying both statements on aged_out_batch removes the class. The batch identifies itself,
 # no flag can be forgotten, and nothing outside it is touched. Step 1 therefore does NOT
 # clear aged_out_at -- it stamps reverted_at and leaves the trail, which is what lets
 # step 2 still find the projects (and is better provenance anyway).
@@ -334,13 +351,15 @@ REVERSAL_ALERTS = (
     'UPDATE a WITH {{ status: a.prior_status, reverted_at: DATE_ISO8601(DATE_NOW()) }} '
     'IN drift_alerts')
 
-# The dormancy gate applies here too, and is evaluated when the statement RUNS, not
-# when it is printed -- DATE_SUBTRACT, not a baked timestamp. The undo may be pasted
-# long after the sweep, and if /prd-sync revived a swept project in between (the
-# revival path this script explicitly supports), that project now has an
-# audit-derived open_gaps. Overwriting it with the live open-alert count would
-# substitute the other definition, and --repair-gaps could not correct it afterwards
-# because the project is no longer dormant.
+# Restores the counter the sweep STASHED, rather than recomputing it. Recomputing
+# cannot undo anything: it produces whatever the alerts say now, which is how a
+# pre-sweep drift was silently discarded. Falls back to the live count only when no
+# stash exists for this batch (a sweep from before prior_open_gaps was recorded).
+#
+# The dormancy gate still applies, evaluated when the statement RUNS (DATE_SUBTRACT,
+# not a baked timestamp): the undo may be pasted long after the sweep, and if /prd-sync
+# revived a swept project in between, that project now has a fresh audit-derived
+# open_gaps which this must not clobber.
 REVERSAL_GAPS = (
     'LET cutoff = DATE_SUBTRACT(DATE_NOW(), {days}, "day") '
     'LET dormant = (FOR r IN project_registry '
@@ -349,11 +368,14 @@ REVERSAL_GAPS = (
     'LET touched = (FOR a IN drift_alerts FILTER a.aged_out_batch == "{batch}" '
     'COLLECT p = a.project_id RETURN p) '
     'FOR p IN touched FILTER p IN dormant '
+    'FOR r IN project_registry FILTER r.project_id == p '
     'LET live = LENGTH(FOR a IN drift_alerts '
     'FILTER a.project_id == p AND a.status == "open" RETURN 1) '
-    'FOR r IN project_registry FILTER r.project_id == p '
-    'UPDATE r WITH {{ open_gaps: live }} IN project_registry '
-    'RETURN {{ project: p, open_gaps: live }}')
+    'LET restored = (r.prior_open_gaps != null AND '
+    'r.prior_open_gaps.batch == "{batch}") ? r.prior_open_gaps.value : live '
+    'UPDATE r WITH {{ open_gaps: restored, prior_open_gaps: null }} '
+    'IN project_registry '
+    'RETURN {{ project: p, open_gaps: restored }}')
 
 
 
@@ -423,12 +445,28 @@ def main() -> int:
         if len(revived) > 8:
             print(f"        … {len(revived) - 8} more project(s)")
 
+    def repair_hint():
+        """The exact --repair-gaps command for the current scope.
+
+        Assembled in one place because each printed hint had been dropping a different
+        flag: --project first, then --stale-days, and then --all, which this change
+        made mandatory for an unscoped run -- so the instruction exited 1 at the
+        fleet-wide guard. Every flag that changes the selection, or the right to run
+        at all, belongs here.
+        """
+        parts = ["triage.py --repair-gaps"]
+        parts.append(f"--project {ONLY_PROJECT}" if ONLY_PROJECT else "--all")
+        if STALE_DAYS != 60:
+            parts.append(f"--stale-days {STALE_DAYS}")
+        parts.append("--yes")
+        return " ".join(parts)
+
     def drifted():
         """Projects whose open_gaps disagrees with the live count, honouring --project."""
         return list(db.aql.execute(
             DRIFTED_GAPS_AQL, bind_vars={"proj": ONLY_PROJECT, "cutoff": cutoff}))
 
-    def resync_gaps(label, projects):
+    def resync_gaps(label, projects, batch=""):
         """Recompute open_gaps for exactly `projects`. No-op on an empty list.
 
         The caller chooses the set, deliberately. A SWEEP may only touch what it swept:
@@ -442,7 +480,8 @@ def main() -> int:
             return
         before = {r["project"]: r["recorded"] for r in drifted()}
         written = list(db.aql.execute(
-            RESYNC_GAPS_AQL, bind_vars={"projects": sorted(projects)}))
+            RESYNC_GAPS_AQL,
+            bind_vars={"projects": sorted(projects), "batch": batch}))
         # Keyed by project, never zipped: RESYNC_GAPS_AQL has no SORT while
         # DRIFTED_GAPS_AQL does, so positional pairing can print one project's name
         # against another's previous counter.
@@ -523,7 +562,7 @@ def main() -> int:
                            ) if active else ""
                     print("    (none compared — nothing in scope was eligible"
                           + (":\n     " + why if why else "") + ")")
-            print("    Add --yes to commit.")
+            print(f"    To commit: {repair_hint()}")
             return 0
         print("\n  --repair-gaps: recomputing the denormalized counter only; no alert "
               "is modified.")
@@ -543,10 +582,7 @@ def main() -> int:
         drift_rows = drifted()
         if drift_rows:
             print(f"    But {len(drift_rows)} project(s) have a drifted open_gaps "
-                  "counter.\n    Run: triage.py --repair-gaps"
-                  + (f" --project {ONLY_PROJECT}" if ONLY_PROJECT else "")
-                  + (f" --stale-days {STALE_DAYS}" if STALE_DAYS != 60 else "")
-                  + " --yes")
+                  "counter.\n    Run: " + repair_hint())
         return 0
 
     reason = f"no review in {STALE_DAYS}+ days; aged out by scripts/triage.py"
@@ -575,7 +611,7 @@ def main() -> int:
     print("\n  REVERSAL (copy BOTH — the sweep makes two mutations; run in order):")
     print(f"    1. {REVERSAL_ALERTS.format(batch=batch)}")
     print(f"    2. {REVERSAL_GAPS.format(batch=batch, days=STALE_DAYS)}")
-    print("    Both are scoped to this batch by aged_out_at, so they need no flags "
+    print("    Both are scoped to this batch by aged_out_batch, so they need no flags "
           "and\n    cannot touch anything this run did not change.\n")
     updated = list(db.aql.execute(AGE_OUT_AQL, bind_vars={
         "keys": ancient, "now": now, "batch": batch, "by": user, "reason": reason}))
@@ -596,7 +632,7 @@ def main() -> int:
             "FOR a IN drift_alerts FILTER a._key IN @keys "
             "COLLECT project = a.project_id RETURN { project }",
             bind_vars={"keys": updated})]
-        resync_gaps("open_gaps", swept)
+        resync_gaps("open_gaps", swept, batch)
     except Exception as exc:  # noqa: BLE001
         # Point at the batch-scoped statement, not the CLI: --repair-gaps re-derives
         # its set from flags and the dormancy cutoff, so it can silently select

@@ -276,13 +276,15 @@ class TestTriageKeepsDenormalizedCountsHonest(unittest.TestCase):
         the dormancy gate had just PROTECTED and printed under "NOT ancient" — writes
         outside the stated scope, absent from the dry run, and not covered by the
         printed reversal. Repairing unrelated drift is --repair-gaps' job."""
-        self.assertIn("def resync_gaps(label, projects):", self.src,
-                      "resync_gaps chooses its own scope instead of being given one")
+        self.assertRegex(self.src, r"def resync_gaps\(label, projects, batch",
+                         "resync_gaps chooses its own scope instead of being given one")
         idx = self.src.index("aged out {len(updated)} alert(s)")
         after = self.src[idx:idx + 1200]
         self.assertIn("COLLECT project = a.project_id", after,
                       "the sweep does not derive its resync set from the swept rows")
-        self.assertIn('resync_gaps("open_gaps", swept)', after)
+        self.assertIn('resync_gaps("open_gaps", swept, batch)', after,
+                      "the sweep's resync does not pass its batch id, so nothing is "
+                      "stashed for the undo to restore")
 
     def test_the_audit_line_pairs_by_project_not_by_position(self):
         """RESYNC_GAPS_AQL has no SORT while DRIFTED_GAPS_AQL does, so zipping the two
@@ -487,6 +489,34 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         self.assertIn("definitional mismatch", self.src[idx:idx + 1000],
                       "the refusal does not say WHY a fleet-wide rewrite is risky")
 
+    def test_the_sweep_stashes_the_counter_it_overwrites(self):
+        """Alerts get prior_status; the registry counter got nothing.
+
+        So the undo could not restore a counter that was ALREADY drifted before the
+        sweep: dormant project recorded 14 / live 9, the sweep writes 0, the undo
+        recomputes 9, and the 14 is gone. That is the same irreversible overwrite of an
+        audit-derived value that --repair-gaps --yes is gated behind --all to prevent,
+        performed with no gate while the banner claimed the batch was fully reversed.
+        """
+        resync = _block(self.src, "RESYNC_GAPS_AQL")
+        self.assertIn("prior_open_gaps", resync,
+                      "the sweep overwrites open_gaps without stashing the old value")
+        self.assertIn("@batch", resync,
+                      "the stash is not keyed to a batch, so an undo cannot tell whose "
+                      "value it is restoring")
+        # A standalone --repair-gaps has no batch to undo and stashes nothing.
+        self.assertIn('@batch == "" ? {}', resync)
+
+    def test_the_undo_restores_the_stashed_counter_rather_than_recomputing(self):
+        """Recomputing cannot undo anything -- it produces whatever the alerts say
+        now, which is exactly how a pre-sweep drift was silently discarded."""
+        stmt = re.search(r"REVERSAL_GAPS = \((.*?)\)\n", self.src, re.DOTALL).group(1)
+        self.assertIn("prior_open_gaps", stmt,
+                      "the undo recomputes the counter instead of restoring it")
+        self.assertIn("r.prior_open_gaps.value", stmt)
+        self.assertIn("prior_open_gaps: null", stmt,
+                      "the stash is not cleared, so a later undo could reuse it")
+
     def test_the_reversal_preserves_the_batch_marker(self):
         """Step 2 finds the batch by aged_out_at, so step 1 must not clear it."""
         stmt = re.search(r"REVERSAL_ALERTS = \((.*?)\)\n", self.src, re.DOTALL).group(1)
@@ -516,8 +546,10 @@ class TestTriageSweepIsRepairableAndReversible(unittest.TestCase):
         says nothing, a wrong counter stays wrong forever."""
         idx = self.src.index("nothing older than the threshold")
         branch = self.src[idx:idx + 700]
-        self.assertIn("triage.py --repair-gaps", branch)
-        self.assertIn('" --yes"', branch)
+        # Assembled by repair_hint() now, which is what guarantees every selecting
+        # flag is present (--project/--all, --stale-days, --yes).
+        self.assertIn("repair_hint()", branch,
+                      "the nothing-to-sweep branch does not offer the repair")
 
 
 class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
@@ -549,9 +581,28 @@ class TestTriageDoesNotContendWithPrdSync(unittest.TestCase):
         """--repair-gaps re-derives its set from --project AND the --stale-days
         dormancy cutoff, so a hint that omits either points at a command that selects
         a different set than the one the operator is looking at."""
-        for frag in ("--project {ONLY_PROJECT}", "--stale-days {STALE_DAYS}"):
-            self.assertIn(frag, self.src,
-                          f"a printed --repair-gaps hint omits {frag}")
+        self.assertIn("def repair_hint():", self.src,
+                      "the --repair-gaps hint is assembled per call site, which is how "
+                      "each one ended up dropping a different flag")
+        idx = self.src.index("def repair_hint():")
+        body = self.src[idx:idx + 900]
+        # Pinned to the APPEND statements, not to the function's prose: an earlier
+        # version asserted the bare string "--all" appeared somewhere in this window,
+        # which repair_hint()'s own docstring satisfies -- so removing the flag from
+        # the command left the test green. Caught by the mutation check.
+        self.assertRegex(
+            body, r'parts\.append\(f?"--project \{ONLY_PROJECT\}" if ONLY_PROJECT '
+                  r'else "--all"\)',
+            "repair_hint() does not emit --project or, unscoped, the --all that a "
+            "fleet-wide --repair-gaps --yes now requires")
+        self.assertRegex(body, r'parts\.append\(f"--stale-days \{STALE_DAYS\}"\)',
+                         "repair_hint() omits --stale-days")
+        self.assertRegex(body, r'parts\.append\("--yes"\)',
+                         "repair_hint() omits --yes")
+        # And nothing may hand-roll the command any more.
+        self.assertEqual(
+            self.src.count("triage.py --repair-gaps"), 1,
+            "a --repair-gaps command is still assembled outside repair_hint()")
 
     def test_no_drift_is_not_reported_when_nothing_was_compared(self):
         """"The counter matches everywhere" and "the dormancy gate excluded everything
