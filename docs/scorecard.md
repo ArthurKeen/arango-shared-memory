@@ -679,6 +679,10 @@ not only when a session happens to trip over it.
 
 ## 1. PRD requirement coverage
 
+> **Last audited round 5 (2026-08-19), not re-verified since.** A coverage claim with no
+> date is the kind of figure this document has twice been caught quoting after it
+> stopped being true.
+
 All 14 sections IMPLEMENTED. §3 (retrieval & ranking) — previously PARTIAL pending
 server-side work — is now IMPLEMENTED: hybrid+graph live, superseded hard-excluded
 server-side, `memory_type`/`why`/`how_to_apply` first-class on save, `memory_type` filter on
@@ -713,6 +717,9 @@ repo is unaffected: it runs the template skills directly rather than a bootstrap
 own audits always used the line-local gate.
 
 ## 3. Adoption & value — the read-path (moving fast; read the caveats)
+
+> **This table stops at round 5 (2026-08-19).** It is kept as the record of that
+> period; current adoption figures are in the round entry at the top.
 
 | Metric | Round 4 (08-13) | Round 5 (08-19) |
 |---|---|---|
@@ -760,6 +767,13 @@ own audits always used the line-local gate.
    real: it moved from 29% to 44% under a defect, and has now stalled.
 
 ## 4. Remaining risks (small)
+
+> **Figures in this section are a round-5 snapshot and have not been re-read since.**
+> They are kept as the record of what was true then — 148 open alerts, 63 unprocessed
+> observations, 7 patches awaiting review, 91 applies — and every one is now wrong.
+> Current numbers are in the round entry at the top. This note exists because the
+> "7 patches awaiting review" line below was still being quoted as current in the
+> round-9 dimension table, three rounds after it stopped being true.
 
 - **A metric discontinuity now exists at 2026-08-18, and it must not be read as a regression.**
   Pre-fix apply figures were produced under gate pressure; post-fix figures will not be. Any
