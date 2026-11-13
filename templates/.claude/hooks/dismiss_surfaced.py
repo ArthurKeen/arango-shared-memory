@@ -32,13 +32,18 @@ import tempfile
 
 # The sibling lives beside this file; add its directory for importers that load it by path.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from hook_paths import ensure_private_dir  # noqa: E402
+from hook_paths import (  # noqa: E402
+    ensure_private_dir, merge_legacy_state, state_dir)
 
 # Claude and Cursor each namespace their own session state; order is search order.
-STATE_DIRS = (
-    os.path.join(".claude", ".shared-memory-sessions"),
-    os.path.join(".cursor", ".shared-memory-sessions"),
-)
+def _state_dirs():
+    """Both runtimes' state directories, under the resolved project root.
+
+    Computed per call rather than at import, so the worktree fix applies here too:
+    this tool is what an agent runs to resolve a surfaced key, and writing the
+    dismissal somewhere the gate does not read would leave the gate unsatisfiable.
+    """
+    return tuple(state_dir(kind) for kind in (".claude", ".cursor"))
 
 
 def _safe(session_id: str) -> str:
@@ -57,7 +62,7 @@ def _load(path: str) -> dict:
 def _find_state(session_id: str) -> str | None:
     """The existing state file for this session, in whichever runtime wrote it."""
     name = f"{_safe(session_id)}.json"
-    for directory in STATE_DIRS:
+    for directory in _state_dirs():
         candidate = os.path.join(directory, name)
         if os.path.exists(candidate):
             return candidate
@@ -84,7 +89,7 @@ def _pending(state: dict) -> list[str]:
 
 
 def _list() -> int:
-    for directory in STATE_DIRS:
+    for directory in _state_dirs():
         if not os.path.isdir(directory):
             continue
         for name in sorted(os.listdir(directory)):

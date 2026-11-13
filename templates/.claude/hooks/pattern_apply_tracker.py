@@ -16,9 +16,12 @@ from typing import Any
 
 # The sibling lives beside this file; add its directory for importers that load it by path.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from hook_paths import ensure_private_dir  # noqa: E402
+from hook_paths import (  # noqa: E402
+    ensure_private_dir, merge_legacy_state, state_dir)
 
-STATE_DIR = os.path.join(".claude", ".shared-memory-sessions")
+# Resolved per call, not at import: hook_paths.state_dir() reads
+# CLAUDE_PROJECT_DIR and the main checkout, so a session that moves into a
+# worktree keeps writing to the one place the gate will read.
 
 
 def _event_id(payload: dict[str, Any]) -> str:
@@ -27,7 +30,9 @@ def _event_id(payload: dict[str, Any]) -> str:
 
 
 def _path(payload: dict[str, Any]) -> str:
-    return os.path.join(STATE_DIR, f"{_event_id(payload)}.json")
+    sid = _event_id(payload)
+    merge_legacy_state(sid)   # fold in state a pre-fix run split elsewhere
+    return os.path.join(state_dir(), f"{sid}.json")
 
 
 def _decode(value: Any) -> Any:

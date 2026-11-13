@@ -57,7 +57,24 @@ try:
     payload = json.load(sys.stdin)
     raw = payload.get("session_id") or payload.get("conversation_id") or "unknown"
     sid = re.sub(r"[^A-Za-z0-9_.-]", "-", str(raw))[:120]
-    with open(os.path.join(".claude", ".shared-memory-sessions", sid + ".json")) as fh:
+    # Resolve the state directory the way the WRITERS do, or the gate reads a
+    # different file than the trackers wrote. Addressing it relative to the cwd split
+    # a session that moved into a git worktree: surfaced keys in one file, applied
+    # keys in the other, and this gate then either blocked forever on keys that had
+    # been applied or let the session end with keys unresolved (r2g, 2026-11-12).
+    # Importing hook_paths keeps the one definition shared; if it is missing (an old
+    # install), fall back to the previous cwd-relative behaviour rather than failing.
+    # ROOT comes in as argv[1]: __file__ does not exist under `python3 -c`, so
+    # deriving the hooks directory here would silently take the fallback every time.
+    sys.path.insert(0, os.path.join(sys.argv[1] if len(sys.argv) > 1 else ".",
+                                    ".claude", "hooks"))
+    try:
+        from hook_paths import merge_legacy_state, state_dir
+        merge_legacy_state(sid)
+        state_path = os.path.join(state_dir(), sid + ".json")
+    except Exception:
+        state_path = os.path.join(".claude", ".shared-memory-sessions", sid + ".json")
+    with open(state_path) as fh:
         state = json.load(fh)
     # A surfaced key is RESOLVED when it was either applied (reuse attributed) or
     # explicitly dismissed (reviewed, deliberately not reused). Counting only
@@ -70,7 +87,7 @@ try:
     pending = [k for k in state.get("surfaced_keys", []) if k not in resolved]
     print(len(pending), sid, ",".join(pending) or "-")
 except Exception:
-    print("0 - -")' 2>/dev/null || echo "0 - -")
+    print("0 - -")' "$ROOT" 2>/dev/null || echo "0 - -")
 APPLY_PENDING=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f1)
 APPLY_SID=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f2)
 APPLY_KEYS=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f3)
