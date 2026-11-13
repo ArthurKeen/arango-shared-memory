@@ -1,6 +1,11 @@
 # System Scorecard — arango-shared-memory
 
-_Last updated: 2026-10-21 (round 8: **round 7's five actions, carried out** — eval
+_Last updated: 2026-11-13 (round 9: **branch provenance confirmed in production; the
+outcome flag refuted** — the capability shipped and the number did not move. Three
+instrumentation defects that were corrupting these measurements are fixed and rolled
+out. Earlier headers preserved below.)_
+
+_Round 8 header (2026-10-21): (round 8: **round 7's five actions, carried out** — eval
 rebuilt and discriminating, two measurement fixes written but not yet deployed, the
 backlog diagnosed as dormancy, and the adoption question answered from the search log
 rather than asked. Earlier headers preserved below.)_
@@ -36,7 +41,29 @@ cluster (`prod.demo.pilot.arango.ai`, db `memory`)._
 > published document. Keep it that way when writing the next round: adoption claims need
 > *counts per distinct person*, never the people.
 
-## Overall (round 8, 2026-10-21): **A− / the measurement gaps are fixed in source and unproven in production**
+## Overall (round 9, 2026-11-13): **A− / provenance proven; the outcome flag is now a harder problem than it looked**
+
+Round 8's two pending fixes both shipped, and only one worked. **Branch provenance is
+confirmed**: of 84 drift alerts detected since, **71 carry a branch stamp** (1 of 402
+last round), appearing exactly at the deploy. **The outcome flag is refuted**: 136
+recorded outcomes since, **every one `worked`**, with the capability live and named in
+every gate message. The explanation round 8 assumed — that the capability was missing —
+is now dead, which makes this the oldest unresolved defect here.
+
+The round's larger finding is that the instrumentation was degrading its own numbers.
+Three issues from an r2g session, all fixed and rolled out to 30/30 projects: hook
+commands exited 2 outside a git repo (a **blocking error**, and one dropped a real
+`pattern-applied` call); session state **split across a git worktree**, leaving the gate
+wrong in both directions; and the capture miner filed **the Stop gate's own message** as
+a user correction, matched on a phrase this repo had put in the gate. Readings before
+2026-11-13 are understated on reuse and polluted on feedback by an unknown amount.
+
+Corpus: 221 patterns, 805 recalls, 272 interactive searches, 294 applies. Full detail in
+"Round 9".
+
+---
+
+### Round 8 overall (2026-10-21): A− / the measurement gaps are fixed in source and unproven in production
 
 Round 7's five actions were carried out. The retrieval eval was rebuilt and now
 discriminates — hybrid beats bm25 (MRR 0.927 vs 0.894, and 0.750 vs 0.617 on the hardest
@@ -94,13 +121,17 @@ can be trusted, and it should be expected to look *worse*.
 |---|---|---|---|
 | PRD requirement coverage | A− | = | §3 retrieval fully IMPLEMENTED (superseded hard-excluded; memory_type first-class + filter) |
 | Live health (prod) | A− | = | verify.py all-green incl. MCP liveness; two open warnings (1 deferred embedding, 7 patches awaiting review) |
-| Adoption & value (read-path) | **B** | = | **round 8: the ceiling has a name.** All three non-owner users work *exclusively* in `contextual-data-fabric` — the one project deliberately excluded from the hook rollout, so they get no SessionStart recall, no apply gate and no nudges. Between them: 15 searches, **0 empty results, a relevant top hit every time**. Retrieval is not what is limiting them. `user-4` did return (2026-10-19), correcting round 7. Volume: recalls 406→**545**, patterns 119→**141**, searches 113→**158**, applies 113→**163**. The C2 follow-up PR at CDF is the highest-leverage adoption action open |
+| Adoption & value (read-path) | **B** | = | **round 9:** steepest growth yet — patterns 141→**221**, recalls 545→**805**, searches 158→**272**, applies 163→**294**. `user-2` roughly doubled (11→21 searches). But concentration is unchanged at ~90% (`arthur` 245), and the structural cause round 8 identified is also unchanged: the other readers work in the one project excluded from the hook rollout, and **that PR has still not been raised**. Grade holds because volume is not adoption |
+| _round 8 (2026-10-21)_ | B | = | **the ceiling has a name.** All three non-owner users work *exclusively* in `contextual-data-fabric` — the one project deliberately excluded from the hook rollout, so they get no SessionStart recall, no apply gate and no nudges. Between them: 15 searches, **0 empty results, a relevant top hit every time**. Retrieval is not what is limiting them. `user-4` did return (2026-10-19), correcting round 7. Volume: recalls 406→**545**, patterns 119→**141**, searches 113→**158**, applies 113→**163**. The C2 follow-up PR at CDF is the highest-leverage adoption action open |
 | _round 7 (2026-09-28)_ | B | ↑ | **the single-operator caveat is retired.** Four humans have now searched (`arthur` 103, `user-2` 7, `user-3` 2, `user-4` 1); `user-2` has 7 saved patterns and 10 applies. Recalls 219→**406**, patterns 97→**119**, searches 95→**113**. Conversion flat at **40%** for a third consecutive reading. Not an A: 91% of searches are still one person, and two of the four appeared once and have not returned |
-| **Metric integrity** | **B−** | = | **round 8: one of the two blockers is cleared, the other is written but undeployed.** The retrieval eval was rebuilt (64 queries, three hard tiers) and now **discriminates**: bm25 MRR 0.894 vs hybrid 0.927, and 0.617 vs 0.750 on lexical traps — so hybrid's value is measured rather than asserted for the first time. It also showed **hybrid+graph changing no result on any query**, which is an unflattering but real answer. Still **0 failures in 163 applies** (0 of 141 patterns ever) and **1 of 402** alerts branch-stamped: both fixed in source this round, neither deployed. Grade holds until the data moves |
+| **Metric integrity** | **B−** | = | **round 9: one blocker cleared, one refuted, and the measurement path itself was found faulty.** Branch provenance **confirmed in production**: 71 of 84 alerts detected since round 8 carry a stamp, up from 1 of 402. The outcome flag **shipped and did not move the number** — 136 outcomes since, all `worked` — so the "capability was missing" explanation is dead and this is now the oldest open defect. Separately, two instrumentation bugs were *corrupting these figures*: dropped `pattern-applied` calls (#12) and a manufactured feedback memory (#13). Readings before 2026-11-13 are understated on reuse and polluted on feedback |
+| _round 8 (2026-10-21)_ | B− | = | **one of the two blockers is cleared, the other is written but undeployed.** The retrieval eval was rebuilt (64 queries, three hard tiers) and now **discriminates**: bm25 MRR 0.894 vs hybrid 0.927, and 0.617 vs 0.750 on lexical traps — so hybrid's value is measured rather than asserted for the first time. It also showed **hybrid+graph changing no result on any query**, which is an unflattering but real answer. Still **0 failures in 163 applies** (0 of 141 patterns ever) and **1 of 402** alerts branch-stamped: both fixed in source this round, neither deployed. Grade holds until the data moves |
 | _round 7 (2026-09-28)_ | B− | = | conversion has now read 40% three times running and applies-per-search sits at **1.00**, which is what honest attribution looks like. Held back by two unresolved items, both older than this round: **0 recorded failures in 113 applies** (0 of 119 patterns has *ever* failed), and a retrieval eval that is both saturated and now 8 weeks stale |
-| Engineering quality | A | = | **round 8:** 111 DB-free tests (was 88); new guards on the apply gate's three-door message (both runtimes) and on the golden eval set's shape, so tier 2 cannot decay back into a saturated tier 1. Server side: 493 tests, with three on branch provenance and two on the closed outcome value set. `scripts/triage.py` added |
+| Engineering quality | A | = | **round 9:** 187 DB-free tests (was 111). Two new guard files for the r2g issues, **18 guards, every one verified to fail against the pre-fix code first** — a habit adopted after four separate guards in this repo turned out to be inert. Includes the case a weaker fix would have passed: the gate must still *block* on a genuinely unresolved key |
+| _round 8 (2026-10-21)_ | A | = | 111 DB-free tests (was 88); new guards on the apply gate's three-door message (both runtimes) and on the golden eval set's shape, so tier 2 cannot decay back into a saturated tier 1. Server side: 493 tests, with three on branch provenance and two on the closed outcome value set. `scripts/triage.py` added |
 | _round 7 (2026-09-28)_ | A | = | 88 DB-free tests, CI green on 3.11–3.14; the delivery-path defect class is now guarded by `test_installer_completeness.py` (references, imports, and both installers). Tempered by the fact that an outside contributor, not the guards, found the three defects that mattered this round |
-| Reliability / robustness | **A−** | = | **round 8:** no new reliability defect found. The CDF exclusion is now understood to carry an adoption cost, not just a coverage one (see Adoption). Review backlog diagnosed via `triage.py`: 200 open alerts, but **2 contradicted and 0 orphaned** — the data is coherent; the volume is dormant projects, not corruption |
+| Reliability / robustness | **B+** | **↓** | **round 9: three real defects, all in the instrumentation, all found by a session using it rather than by this project's own guards.** Hook commands exited 2 outside a git repo — a *blocking error* shown to the model, defeating every hook's fail-open design and dropping at least one real apply event. Session state split across a git worktree, leaving the gate wrong in both directions. And the capture miner filed the Stop gate's own text as a user correction. Fixed and rolled out 30/30 by checksum; the grade reflects that they shipped at all |
+| _round 8 (2026-10-21)_ | A− | = | no new reliability defect found. The CDF exclusion is now understood to carry an adoption cost, not just a coverage one (see Adoption). Review backlog diagnosed via `triage.py`: 200 open alerts, but **2 contradicted and 0 orphaned** — the data is coherent; the volume is dormant projects, not corruption |
 | _round 7 (2026-09-28)_ | A− | ↓ | the stop gate's block decision was **unparseable** whenever a shell edit triggered the reconciler (notice on stdout ahead of the JSON) — fixed, but it means the gate silently failed exactly when it had caught something. Fleet re-verified 31/31 by checksum. `contextual-data-fabric` remains deliberately excluded |
 | Liveness / self-observability | B− | ↑ | **now continuous without a scheduler**: SessionStart fails open but no longer fails *silent*, so every session reports a dead read path. Server-side, a blocked startup connect no longer takes the whole toolset down (2026-08-21). Remaining gap: nothing reports when nobody starts a session |
 
@@ -502,6 +533,87 @@ benchmark rebuilt and now carrying real information, including an unflattering r
 about the graph layer. One backlog diagnosed as dormancy rather than neglect. And one
 adoption question answered from evidence, with a concrete owner action behind it.
 
+### Round 9 (2026-11-13): one prediction confirmed, one refuted — and the refutation is the finding
+
+Round 8 recorded two fixes as "fixed in source, unproven in production" and named checking
+them as this round's job. Both shipped. They did not both work.
+
+Corpus: **221 patterns, 805 automatic recalls, 272 interactive searches, 294 applies,
+29 registered projects.** Growth since round 8 is the steepest yet — patterns +57%,
+applies +80% in three weeks.
+
+**CONFIRMED: drift alerts now carry branch provenance.**
+Round 8 read **1 of 402**. Of the 84 alerts detected since, **71 carry a branch stamp
+(85%)**, and the monthly split is unambiguous — 1 in July, 1 in August, then 29 in
+October and 42 in November, appearing exactly at the deploy. 35 closed alerts also carry
+`closed_branch`/`closed_commit`, the pair added so that a close recorded on a feature
+branch can be told from one that reached the default branch. The fleet-wide figure is
+73/296 only because 212 alerts predate the fix. This one is done.
+
+**REFUTED: the outcome flag still only says yes.**
+The server has accepted `outcome='failed'` since 2026-10-21, both runtimes' gates name
+it as one of three explicit outcomes, and the skill defines failure mechanically. Since
+round 8 there have been **136 recorded apply outcomes. Every one is `worked`.** Zero
+failures, across 221 patterns, cumulatively.
+
+Round 8 assumed the number was flat because the capability was missing. It is not
+missing any more and the number did not move, so that explanation is dead. What is left
+is less comfortable: either applied patterns genuinely never fail — implausible at
+n=294 — or recording a failure is something agents will not do unprompted, however
+clearly the gate offers it. Offering a third door turns out not to be the same as making
+it load-bearing. **This is now the oldest unresolved defect in the project**, and the
+next attempt has to change the incentive rather than the documentation.
+
+**The feedback loop was reading its own output.**
+Three issues filed from an r2g session, all fixed and rolled out this round
+(PR #14, 30/30 projects verified by checksum):
+
+- **#12** — every hook command resolved its script relative to the *current directory*.
+  Outside a git repository the path became `/.claude/hooks/<script>`, python exited 2,
+  and Claude Code shows exit 2 from a PostToolUse hook to the model as a **blocking
+  error**. Every hook here is written to fail open; the wrapper failed before they ran.
+  It fired three times in one session, and one was a `pattern-applied` call — so a real
+  reuse went unrecorded and the gate was left holding a key it could not resolve.
+- **#11** — the apply-gate state was addressed the same way, so a session that moved
+  into a git worktree **split its state across two files**. The gate was then wrong in
+  both directions: it blocked forever on keys that had been applied, or let a session
+  end with keys unresolved. The only manual remedy was merging the files by hand.
+- **#13** — the capture miner filed the Stop gate's own block message as a
+  `user-correction`. Triage of 22 candidates found the single correction was the gate
+  text, matched on **"still failing"** — a phrase this repo added to the gate in the
+  three-door change. The miner mined its own output as a lesson from the user.
+
+Taken together these are not three unrelated bugs. The system's instrumentation was
+reading the current directory, which is not stable, and reading its own output, which is
+not evidence. Both are now fixed — scripts and state resolve through `CLAUDE_PROJECT_DIR`
+with the main checkout as fallback, and harness-generated text is excluded by prefix and
+by two structural signals used *only* to exclude, so an unrecognised transcript version
+can never silently stop correction mining.
+
+It is worth stating plainly that **#12 and #13 were actively corrupting the measurements
+in this document**: one dropped apply events, the other manufactured a false feedback
+memory. Readings from before 2026-11-13 are understated on reuse and polluted on
+feedback by an unknown amount.
+
+**Queues.** Open alerts 200 → **126**, and 53 of the difference is the deliberate
+`stale` sweep rather than work done. Proposed patches **38 → 32** — the first fall ever
+recorded here, so someone is reviewing. Unprocessed observations 153 → **188**, still
+climbing. `project_registry.open_gaps` is still drifted for 9 dormant projects from the
+2026-10-23 sweep; the repair is one command (`--repair-gaps --all --yes`) and remains
+unrun.
+
+**People.** `arthur` 245 interactive searches, `user-2` **21** (roughly doubled since
+round 8), `user-4` 4, `user-3` 2. The concentration is unchanged at ~90%, and the
+structural reason identified in round 8 — the other readers work in the one project
+deliberately excluded from the hook rollout — is also unchanged. That PR has still not
+been raised.
+
+**Net:** provenance is solved and verified. The outcome flag is now a harder problem
+than it looked, because the easy explanation has been eliminated. And the round's real
+lesson is that three defects in the instrumentation had been quietly degrading the
+numbers this scorecard reports — which is an argument for auditing the measurement path
+on a schedule, not only when a session happens to trip over it.
+
 ## 1. PRD requirement coverage
 
 All 14 sections IMPLEMENTED. §3 (retrieval & ranking) — previously PARTIAL pending
@@ -611,6 +723,27 @@ own audits always used the line-local gate.
 - Capture miner correction-detection is still regex-narrow (by design).
 
 ## 5. Recommended next actions
+
+**Ranked for round 9 (2026-11-13):**
+
+1. **Make recording a failure something that happens, not something that is offered.**
+   136 outcomes since round 8, all `worked`, with the capability live and named in every
+   gate message. Documentation has now been tried and has failed; the next attempt has
+   to change the incentive — deriving the outcome from evidence the agent cannot assert
+   (tests still red, the change reverted, the alert reopened) rather than asking for it.
+2. **Raise the CDF enablement PR.** Named as the highest-leverage adoption action in
+   rounds 8 and 9 and still not raised. ~90% search concentration will not move while
+   the other readers work in the one project without the hooks.
+3. **Repair `open_gaps` for the 9 drifted projects.** One command
+   (`triage.py --repair-gaps --all --yes`), outstanding since the 2026-10-23 sweep,
+   and it feeds both the SessionStart digest and the visualizer.
+4. **Audit the measurement path on a schedule.** Three defects that were degrading the
+   numbers in this document were found by a session tripping over them, not by any
+   guard here. The figures that matter — applies, corrections, surfaced counts — have no
+   end-to-end test proving they are recorded at all.
+5. **Add a relational tier to the retrieval eval.** Still the only way to answer whether
+   the graph layer earns its cost; round 8 showed it changed no result on 64 queries,
+   none of which required a 1-hop expansion.
 
 **Ranked for round 7 (2026-09-28):**
 
