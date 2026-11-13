@@ -544,11 +544,22 @@ applies +80% in three weeks.
 
 **CONFIRMED: drift alerts now carry branch provenance.**
 Round 8 read **1 of 402**. Of the 84 alerts detected since, **71 carry a branch stamp
-(85%)**, and the monthly split is unambiguous — 1 in July, 1 in August, then 29 in
-October and 42 in November, appearing exactly at the deploy. 35 closed alerts also carry
-`closed_branch`/`closed_commit`, the pair added so that a close recorded on a feature
-branch can be told from one that reached the default branch. The fleet-wide figure is
-73/296 only because 212 alerts predate the fix. This one is done.
+(85%)**, and the monthly split is unambiguous — 1 in July, 1 in August, then **28 in
+October and 43 in November**, appearing at the 2026-10-29 deploy. 35 closed alerts also
+carry `closed_branch`/`closed_commit`, the pair added so a close recorded on a feature
+branch can be told from one that reached the default branch. This one is done.
+
+> **Do not quote this as a before/after.** The collection holds **296** rows today
+> against round 8's 402, while 84 of today's rows arrived *since* round 8 — so the
+> denominators are not comparable. `phase3_lifecycle.py` maintains a **TTL index on
+> `drift_alerts.closed_at` that expires closed alerts 90 days after they close**, and
+> closed alerts fell 207 → 116 over the same window. (The TTL does not account for all
+> of the drop — see the queue note below.)
+>
+> **223** of today's rows are unstamped, not 212: 212 is the count detected before round
+> 8, but the deploy landed 2026-10-29, so 13 post-round-8 alerts are unstamped too. The
+> claim that holds is the per-window one: **71 of the 84 alerts detected since round 8
+> carry a stamp**.
 
 **REFUTED: the outcome flag still only says yes.**
 The server has accepted `outcome='failed'` since 2026-10-21, both runtimes' gates name
@@ -609,9 +620,27 @@ in this document**: one dropped apply events, the other manufactured a false fee
 memory. Readings from before 2026-11-13 are understated on reuse and polluted on
 feedback by an unknown amount.
 
-**Queues.** Open alerts 200 → **126**, but that is not a 74-row reduction: 84 new
-alerts were detected in the same window, so about 158 rows left the open state — 53 to
-the deliberate `stale` sweep and the rest to genuine closes. Proposed patches **38 → 32** — the first fall ever
+**Queues.** Open alerts 200 → **126**. That is not a 74-row reduction — 84 new alerts
+were detected in the same window, so roughly 158 rows left the open state, of which 53
+went to the deliberate `stale` sweep.
+
+> **The remainder does not reconcile, and the evidence to reconcile it is gone.** Only
+> **43** alerts have a `closed_at` inside the window, which cannot account for ~105
+> departures. Separately, the collection holds **212** rows detected before round 8
+> against round 8's 402, so ~190 older rows are no longer present.
+>
+> The TTL explains some of it and not obviously all: it expires closed alerts 90 days
+> after `closed_at`, the oldest surviving `closed_at` is 2026-08-18 (≈87 days ago,
+> consistent with an active 90-day window), and between the two rounds that window
+> advanced three weeks — so three weeks of historical closes were swept. Whether that
+> is 190 rows cannot be checked now, because the rows the check needs are the rows the
+> TTL deleted.
+>
+> So this is recorded as **unreconciled**, not explained. Two consequences: alert counts
+> are **not comparable across rounds** and should only be read within a window, and the
+> project has no retained record of its own closes — the TTL optimises storage at the
+> cost of the audit trail. Keeping a small immutable close-event log is the obvious fix
+> and is not in place. Proposed patches **38 → 32** — the first fall ever
 recorded here, so someone is reviewing. Unprocessed observations 153 → **188**, still
 climbing. `project_registry.open_gaps` **was** drifted for 9 dormant projects from the 2026-10-23
 sweep; `--repair-gaps --all --yes` was run on 2026-11-13 and all nine now read 0. One
@@ -632,8 +661,12 @@ numbers this scorecard reports — one of them a *recurrence* of a defect class 
 week earlier — which is an argument for auditing the measurement path on a schedule,
 not only when a session happens to trip over it.
 
-> **On this round's own figures.** The first draft of this section was reviewed against
-> prod and four numbers were wrong: the October/November split (29/42, actually 28/43),
+> **On this round's own figures.** This section was reviewed against prod twice. The
+> first pass found four wrong numbers; the second found that one of the corrections had
+> never been written to the file (the editing script raised before it saved, so the
+> document asserted 29/42 in one place and declared 29/42 wrong in another), and that a
+> third figure was unsupportable rather than merely wrong — see the queue note. The
+> wrong numbers were: the October/November split (29/42, actually 28/43),
 > the count of unstamped alerts (212, actually 223), the open-alert arithmetic (it
 > ignored the 84 alerts detected in the same window), and an action item that was still
 > listed as outstanding after it had been completed the same day. A fifth claim — "1 of
