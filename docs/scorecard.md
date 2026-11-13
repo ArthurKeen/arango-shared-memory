@@ -120,7 +120,7 @@ can be trusted, and it should be expected to look *worse*.
 | Dimension | Grade | Δ | One-line |
 |---|---|---|---|
 | PRD requirement coverage | A− | = | §3 retrieval fully IMPLEMENTED (superseded hard-excluded; memory_type first-class + filter) |
-| Live health (prod) | A− | = | verify.py all-green incl. MCP liveness; two open warnings (1 deferred embedding, 7 patches awaiting review) |
+| Live health (prod) | A− | = | **round 9:** verify.py all-green incl. MCP liveness. Open warnings re-read against prod: **32** patches awaiting review (this row said 7 for three rounds — it had not been re-read), 188 unprocessed observations. Closed alerts expire 90 days after `closed_at` via the `phase3_lifecycle.py` TTL, which is why the collection total falls between rounds |
 | Adoption & value (read-path) | **B** | = | **round 9:** steepest growth yet — patterns 141→**221**, recalls 545→**805**, searches 158→**272**, applies 163→**294**. `user-2` roughly doubled (11→21 searches). But concentration is unchanged at ~90% (`arthur` 245), and the structural cause round 8 identified is also unchanged: the other readers work in the one project excluded from the hook rollout, and **that PR has still not been raised**. Grade holds because volume is not adoption |
 | _round 8 (2026-10-21)_ | B | = | **the ceiling has a name.** All three non-owner users work *exclusively* in `contextual-data-fabric` — the one project deliberately excluded from the hook rollout, so they get no SessionStart recall, no apply gate and no nudges. Between them: 15 searches, **0 empty results, a relevant top hit every time**. Retrieval is not what is limiting them. `user-4` did return (2026-10-19), correcting round 7. Volume: recalls 406→**545**, patterns 119→**141**, searches 113→**158**, applies 113→**163**. The C2 follow-up PR at CDF is the highest-leverage adoption action open |
 | _round 7 (2026-09-28)_ | B | ↑ | **the single-operator caveat is retired.** Four humans have now searched (`arthur` 103, `user-2` 7, `user-3` 2, `user-4` 1); `user-2` has 7 saved patterns and 10 applies. Recalls 219→**406**, patterns 97→**119**, searches 95→**113**. Conversion flat at **40%** for a third consecutive reading. Not an A: 91% of searches are still one person, and two of the four appeared once and have not returned |
@@ -553,8 +553,14 @@ branch can be told from one that reached the default branch. The fleet-wide figu
 **REFUTED: the outcome flag still only says yes.**
 The server has accepted `outcome='failed'` since 2026-10-21, both runtimes' gates name
 it as one of three explicit outcomes, and the skill defines failure mechanically. Since
-round 8 there have been **136 recorded apply outcomes. Every one is `worked`.** Zero
-failures, across 221 patterns, cumulatively.
+round 8 the `apply_log` carries **136 outcome entries, every one `worked`**, and
+`applied_failed` sums to **0** across all 221 patterns.
+
+(136 is a floor, not an exact count: `apply_log` is capped at 20 entries per pattern, so
+a heavily-reused pattern drops its oldest. `applied_failed` is an uncapped counter and
+it is zero — that is the claim that matters. Two patterns carry a top-level
+`worked: false`, but both have `usage_count: 0`; that is a field on the pattern itself,
+not an apply outcome.)
 
 Round 8 assumed the number was flat because the capability was missing. It is not
 missing any more and the number did not move, so that explanation is dead. What is left
@@ -585,7 +591,15 @@ Three issues filed from an r2g session, all fixed and rolled out this round
 
 Taken together these are not three unrelated bugs. The system's instrumentation was
 reading the current directory, which is not stable, and reading its own output, which is
-not evidence. Both are now fixed — scripts and state resolve through `CLAUDE_PROJECT_DIR`
+not evidence.
+
+**And #12 was a recurrence, not a discovery.** PR #10, merged 2026-11-06 — a week before
+these were filed — was titled *"run the Claude hooks in git worktrees"* and touched the
+same files for the same reason: cwd-relative resolution. It fixed the worktree case and
+left the outside-a-repository case, which then failed *louder*, as a blocking error.
+Fixing one instance of a defect class and treating the class as closed is a failure mode
+this project has written down about itself before. It happened again here, one week
+apart, in the same files. Both are now fixed — scripts and state resolve through `CLAUDE_PROJECT_DIR`
 with the main checkout as fallback, and harness-generated text is excluded by prefix and
 by two structural signals used *only* to exclude, so an unrecognised transcript version
 can never silently stop correction mining.
@@ -595,12 +609,15 @@ in this document**: one dropped apply events, the other manufactured a false fee
 memory. Readings from before 2026-11-13 are understated on reuse and polluted on
 feedback by an unknown amount.
 
-**Queues.** Open alerts 200 → **126**, and 53 of the difference is the deliberate
-`stale` sweep rather than work done. Proposed patches **38 → 32** — the first fall ever
+**Queues.** Open alerts 200 → **126**, but that is not a 74-row reduction: 84 new
+alerts were detected in the same window, so about 158 rows left the open state — 53 to
+the deliberate `stale` sweep and the rest to genuine closes. Proposed patches **38 → 32** — the first fall ever
 recorded here, so someone is reviewing. Unprocessed observations 153 → **188**, still
-climbing. `project_registry.open_gaps` is still drifted for 9 dormant projects from the
-2026-10-23 sweep; the repair is one command (`--repair-gaps --all --yes`) and remains
-unrun.
+climbing. `project_registry.open_gaps` **was** drifted for 9 dormant projects from the 2026-10-23
+sweep; `--repair-gaps --all --yes` was run on 2026-11-13 and all nine now read 0. One
+project still differs — `project-sentinel`, recorded 10 against 1 live open alert — and
+is correctly left alone: it is not dormant, so `/prd-sync` owns that counter and the
+repair would overwrite an audit-derived value with a different definition.
 
 **People.** `arthur` 245 interactive searches, `user-2` **21** (roughly doubled since
 round 8), `user-4` 4, `user-3` 2. The concentration is unchanged at ~90%, and the
@@ -611,8 +628,21 @@ been raised.
 **Net:** provenance is solved and verified. The outcome flag is now a harder problem
 than it looked, because the easy explanation has been eliminated. And the round's real
 lesson is that three defects in the instrumentation had been quietly degrading the
-numbers this scorecard reports — which is an argument for auditing the measurement path
-on a schedule, not only when a session happens to trip over it.
+numbers this scorecard reports — one of them a *recurrence* of a defect class fixed a
+week earlier — which is an argument for auditing the measurement path on a schedule,
+not only when a session happens to trip over it.
+
+> **On this round's own figures.** The first draft of this section was reviewed against
+> prod and four numbers were wrong: the October/November split (29/42, actually 28/43),
+> the count of unstamped alerts (212, actually 223), the open-alert arithmetic (it
+> ignored the 84 alerts detected in the same window), and an action item that was still
+> listed as outstanding after it had been completed the same day. A fifth claim — "1 of
+> 402 → 73 of 296" — was arithmetically true and *misleading*, because the TTL had
+> removed ~190 closed rows from the denominator in between.
+>
+> None of that changed the two verdicts, whose per-window evidence is independently
+> correct. It is recorded because a scorecard that reports unaudited numbers is the
+> thing this round is complaining about.
 
 ## 1. PRD requirement coverage
 
@@ -734,9 +764,9 @@ own audits always used the line-local gate.
 2. **Raise the CDF enablement PR.** Named as the highest-leverage adoption action in
    rounds 8 and 9 and still not raised. ~90% search concentration will not move while
    the other readers work in the one project without the hooks.
-3. **Repair `open_gaps` for the 9 drifted projects.** One command
-   (`triage.py --repair-gaps --all --yes`), outstanding since the 2026-10-23 sweep,
-   and it feeds both the SessionStart digest and the visualizer.
+3. ~~**Repair `open_gaps` for the 9 drifted projects.**~~ **DONE 2026-11-13.** All
+   nine now read 0. `project-sentinel` still differs (10 vs 1) and is deliberately not
+   repaired — it is not dormant, so `/prd-sync` owns that counter.
 4. **Audit the measurement path on a schedule.** Three defects that were degrading the
    numbers in this document were found by a session tripping over them, not by any
    guard here. The figures that matter — applies, corrections, surfaced counts — have no
