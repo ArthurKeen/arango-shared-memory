@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=.claude/hooks/session_recall.py; [ -f \"$f\" ] || f=\"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')/$f\"; python3 \"$f\"",
+            "command": "f=.claude/hooks/session_recall.py; for d in \"$CLAUDE_PROJECT_DIR\" . \"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')\"; do [ -n \"$d\" ] && [ -f \"$d/$f\" ] && exec python3 \"$d/$f\"; done; exit 0",
             "timeout": 15
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=.claude/hooks/drift_queue.py; [ -f \"$f\" ] || f=\"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')/$f\"; python3 \"$f\""
+            "command": "f=.claude/hooks/drift_queue.py; for d in \"$CLAUDE_PROJECT_DIR\" . \"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')\"; do [ -n \"$d\" ] && [ -f \"$d/$f\" ] && exec python3 \"$d/$f\"; done; exit 0"
           }
         ]
       },
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=.claude/hooks/pattern_apply_tracker.py; [ -f \"$f\" ] || f=\"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')/$f\"; python3 \"$f\""
+            "command": "f=.claude/hooks/pattern_apply_tracker.py; for d in \"$CLAUDE_PROJECT_DIR\" . \"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')\"; do [ -n \"$d\" ] && [ -f \"$d/$f\" ] && exec python3 \"$d/$f\"; done; exit 0"
           }
         ]
       }
@@ -36,12 +36,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=.claude/hooks/capture_candidates.py; [ -f \"$f\" ] || f=\"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')/$f\"; python3 \"$f\"",
+            "command": "f=.claude/hooks/capture_candidates.py; for d in \"$CLAUDE_PROJECT_DIR\" . \"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')\"; do [ -n \"$d\" ] && [ -f \"$d/$f\" ] && exec python3 \"$d/$f\"; done; exit 0",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "f=.claude/hooks/drift_stop_gate.sh; [ -f \"$f\" ] || f=\"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')/$f\"; bash \"$f\""
+            "command": "f=.claude/hooks/drift_stop_gate.sh; for d in \"$CLAUDE_PROJECT_DIR\" . \"$(git worktree list --porcelain 2>/dev/null </dev/null | sed -n '1s/^worktree //p')\"; do [ -n \"$d\" ] && [ -f \"$d/$f\" ] && exec bash \"$d/$f\"; done; exit 0"
           }
         ]
       }

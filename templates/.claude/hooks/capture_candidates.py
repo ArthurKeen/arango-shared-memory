@@ -42,6 +42,42 @@ SNIPPET = 280           # max chars of evidence kept per candidate
 # Correction-ish openers / phrases in a real user message. Deliberately tight:
 # false negatives are fine (humans still save via /pattern-save); false
 # positives waste reviewer attention.
+#: User-role text the HARNESS produced, which must never be mined as something the
+#: user said. Claude Code delivers several kinds of machine-generated content in a
+#: user-role message, and one of them is hook feedback -- including this project's own
+#: Stop gate. Triage of an r2g queue on 2026-11-13 found the only `user-correction`
+#: among 22 candidates was the apply gate's own block message, matched on "still
+#: failing" from the text describing a failed pattern application. The miner mined its
+#: own gate as a lesson from the user.
+HARNESS_PREFIXES = (
+    "<system-reminder", "<local-command", "<command-name", "[SYSTEM",
+    "Stop hook feedback:",       # the case above
+    "PreToolUse:", "PostToolUse:", "UserPromptSubmit:",  # the other hook channels
+    "Caveat: The messages below",                        # resumed-session preamble
+    "This session is being continued from",              # compaction preamble
+)
+
+#: Records whose promptSource says the harness generated them. Used ONLY to exclude:
+#: an unrecognised or absent value must never cause a genuine correction to be dropped,
+#: because the field is not guaranteed across Claude Code versions and a silent stop to
+#: all correction capture would be worse than the false positive this guards.
+GENERATED_PROMPT_SOURCES = ("system",)
+
+
+def _is_harness_text(entry, text):
+    """True when this user-role text came from the harness rather than the person.
+
+    Two independent signals, both exclusionary. The prefix list is the baseline and
+    works on any transcript version. promptSource/isMeta are structural and catch
+    kinds the list does not name yet.
+    """
+    if not text or text.startswith(HARNESS_PREFIXES):
+        return True
+    if entry.get("isMeta"):
+        return True
+    return entry.get("promptSource") in GENERATED_PROMPT_SOURCES
+
+
 CORRECTION_RE = re.compile(
     r"(?:^\s*no\b(?!\s+worries)|^\s*nope\b|^\s*wrong\b|\bthat'?s\s+(?:wrong|not\s+right|not\s+what)\b"
     r"|\byou\s+should\s+have\b|\bi\s+meant\b|\binstead\s+of\s+that\b|\bdon'?t\s+do\s+that\b"
@@ -149,8 +185,7 @@ def mine(transcript_path):
                 else:
                     text = ""
                 # skip harness/meta pseudo-messages; keep genuine typed input
-                if text and not text.startswith(("<system-reminder", "<local-command",
-                                                 "<command-name", "[SYSTEM")):
+                if not _is_harness_text(entry, text):
                     if CORRECTION_RE.search(text[:400]):
                         corrections.append(_clean(text))
 

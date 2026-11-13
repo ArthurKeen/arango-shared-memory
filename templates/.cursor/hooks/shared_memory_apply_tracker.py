@@ -13,11 +13,41 @@ import contextlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from typing import Any
 
-STATE_DIR = os.path.join(".cursor", ".shared-memory-sessions")
+def _main_checkout():
+    """Root of the repository's MAIN working tree, or None.
+
+    ``git worktree list`` names it first, from a linked worktree too. Mirrors
+    .claude/hooks/hook_paths.main_checkout(); duplicated rather than imported because
+    a Cursor hook must not depend on the Claude runtime's files being installed.
+    """
+    try:
+        out = subprocess.run(["git", "worktree", "list", "--porcelain"],
+                             capture_output=True, text=True, timeout=5, check=False,
+                             stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    first = out.stdout.splitlines()[:1]
+    if first and first[0].startswith("worktree "):
+        return first[0][len("worktree "):]
+    return None
+
+
+# Same resolution as the Claude hooks (see .claude/hooks/hook_paths.py):
+# a session that moves into a git worktree must not split its state.
+def _state_dir():
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    if env and os.path.isdir(env):
+        root = env
+    else:
+        root = _main_checkout() or os.getcwd()
+    return os.path.join(root, ".cursor", ".shared-memory-sessions")
 
 
 def _event_id(payload: dict[str, Any]) -> str:
@@ -26,7 +56,7 @@ def _event_id(payload: dict[str, Any]) -> str:
 
 
 def _state_path(payload: dict[str, Any]) -> str:
-    return os.path.join(STATE_DIR, f"{_event_id(payload)}.json")
+    return os.path.join(_state_dir(), f"{_event_id(payload)}.json")
 
 
 def _load(path: str) -> dict[str, Any]:

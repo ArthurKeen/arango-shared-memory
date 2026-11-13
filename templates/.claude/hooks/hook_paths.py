@@ -44,6 +44,106 @@ def main_checkout():
     return None
 
 
+def project_root():
+    """The one directory all hook state belongs under, for this session.
+
+    CLAUDE_PROJECT_DIR first: Claude Code sets it for every hook command and it is
+    stable no matter where the shell has wandered. Then the main checkout, which keeps
+    a linked worktree writing to the same place as the checkout it was made from.
+    Then the cwd, so a project outside git still works.
+
+    This exists because the apply-gate state used to be addressed relative to the cwd,
+    so a session that moved into a worktree split its state across two files: surfaced
+    keys in one, applied keys in the other. The gate read whichever was under the cwd
+    at stop time and then either blocked forever on keys that HAD been applied, or let
+    the session end with keys unresolved. Hit in a real r2g session on 2026-11-12, and
+    the only way out was merging the two files by hand -- calling pattern-applied
+    again would have double-counted the reuse.
+    """
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    if env and os.path.isdir(env):
+        return env
+    return main_checkout() or os.getcwd()
+
+
+def state_dir(kind=".claude"):
+    """``<project root>/<kind>/.shared-memory-sessions``.
+
+    Every reader and writer of the apply-gate state must call this and nothing else.
+    Five places addressed the directory independently, which is how the writers and
+    the gate came to disagree.
+    """
+    return os.path.join(project_root(), kind, ".shared-memory-sessions")
+
+
+def legacy_state_dirs(kind=".claude"):
+    """Directories a previous version may have written state into, for migration.
+
+    The cwd and the main checkout, when either differs from the resolved root. State
+    written before this change still lives there, and a session that straddled a
+    worktree has half of itself in each.
+    """
+    root = os.path.realpath(project_root())
+    seen = {root}
+    for base in (os.getcwd(), main_checkout()):
+        if not base:
+            continue
+        real = os.path.realpath(base)
+        if real in seen:
+            continue
+        seen.add(real)
+        yield os.path.join(base, kind, ".shared-memory-sessions")
+
+
+def merge_legacy_state(session_id, kind=".claude"):
+    """Fold any legacy state for ``session_id`` into the resolved location.
+
+    Union of the key lists, because the split is exactly that: surfaced keys in one
+    file and applied keys in the other. Union is also what makes this safe to run on
+    every read -- it is idempotent, and it can only ever RESOLVE keys, never
+    resurrect one that was already dealt with.
+
+    The legacy file is left in place. Deleting state on behalf of a session that may
+    still be running is not worth the saving, and an operator can see what was merged.
+    """
+    import json
+
+    target = os.path.join(state_dir(kind), f"{session_id}.json")
+    merged, found = {}, False
+    for legacy_dir in legacy_state_dirs(kind):
+        path = os.path.join(legacy_dir, f"{session_id}.json")
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        found = True
+        for key, value in data.items():
+            if isinstance(value, list):
+                merged[key] = sorted(set(merged.get(key, [])) | set(value))
+            else:
+                merged.setdefault(key, value)
+    if not found:
+        return False
+    try:
+        if os.path.isfile(target):
+            with open(target, encoding="utf-8") as fh:
+                current = json.load(fh)
+            for key, value in current.items():
+                if isinstance(value, list):
+                    merged[key] = sorted(set(merged.get(key, [])) | set(value))
+                else:
+                    merged[key] = value
+        ensure_private_dir(os.path.dirname(target))
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(merged, fh, indent=2)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def agent_doc_paths():
     """AGENTS.md and CLAUDE.md in the cwd, then in the main checkout when that differs.
 
