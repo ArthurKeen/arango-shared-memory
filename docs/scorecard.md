@@ -818,6 +818,18 @@ own audits always used the line-local gate.
    treated as evidence, because contesting an honest claim is worse than missing a
    dishonest one.
 
+   Review of the change found **six defects, four reproduced end to end**, and five of
+   the six pointed the same way: the mechanism would have *reported* working while
+   measuring nothing. `pytest -q 2>&1 | tail -20` exits with tail's status, so every
+   piped test run — the dominant form in real transcripts — logged green, and a false
+   green does not merely miss a contest, it clears one. A `|` inside
+   `grep -nE "ruff|mypy"` parsed as a pipeline, so a grep finding nothing was stored as
+   a red type check, which would have contested *honest* claims. And the contest was
+   computed only when `pattern-applied` fired, which makes it inert in the ordering
+   this project's own `CLAUDE.md` prescribes: record the reuse immediately, *then* keep
+   working. That last one is the pattern worth carrying forward — a guard can pass
+   every test written for it and still never fire in the workflow it was built for.
+
    **This is a mechanism, not a result.** The count to watch in round 10 is whether
    `applied_failed` is still 0. If it is, then the incentive argument was wrong too and
    the remaining explanation is that reuse here genuinely never fails — which, at
