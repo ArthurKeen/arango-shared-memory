@@ -36,6 +36,17 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOKS = os.path.join(REPO, "templates", ".claude", "hooks")
 TRACKER = os.path.join(HOOKS, "pattern_apply_tracker.py")
 
+
+def _load_tracker():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("apply_tracker_under_test", TRACKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_TRACKER = _load_tracker()
+
 SEARCH = {"tool_name": "mcp__arangodb-memory-mcp__pattern-search",
           "tool_response": {"patterns": [{"_key": "k1"}]}}
 
@@ -472,6 +483,114 @@ class TestItActuallyFiresOnRealCommands(unittest.TestCase):
         after = os.stat(path)
         self.assertEqual(before.st_ino, after.st_ino,
                          "BashOutput took the slow path and rewrote the state file")
+
+
+class TestWhatTheRunnerSaidVersusWhatTheShellReturned(unittest.TestCase):
+    """Third review round. Three of its five findings could each silently defeat the
+    central guarantee -- a red check contesting an asserted success -- and two of them
+    were earlier fixes coming back through a different door."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def _contest_with(self, cmd, out):
+        self.fx.track(self.fx.repo, dict(bash(cmd, stdout=out), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+
+    def test_a_different_piped_check_does_not_clear_the_contest(self):
+        """Comparing contests by status segment meant the segment of ANY piped command
+        was the pager, so a green `ruff check . | tail -20` cleared a contest raised by
+        a red `pytest | tail -20` -- both being `tail -20`. The any-green-clears bug,
+        returning for exactly the piping form this module calls dominant."""
+        self._contest_with("python3 -m pytest -q 2>&1 | tail -20", "2 failed, 8 passed")
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        self.fx.track(self.fx.repo, dict(
+            bash("ruff check . 2>&1 | tail -20", stdout="All checks passed!"),
+            session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"),
+                             "a different check cleared the contest")
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m pytest -q 2>&1 | tail -20", stdout="10 passed"),
+            session_id="s1"))
+        self.assertIsNone(self.fx.state().get("contested"))
+
+    def test_an_early_green_stage_does_not_make_a_failing_script_green(self):
+        """A compound command prints every stage. `make check` emitting unittest's OK
+        before shellcheck fails would be recorded GREEN -- and re-running that same
+        still-failing command would then CLEAR a real contest, which is worse than
+        recording nothing at all."""
+        self._contest_with("make check", "shellcheck: 2 issues\n1 failed")
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        self.fx.track(self.fx.repo, dict(
+            bash("make check", ok=False,
+                 text="Error: Exit code 1\nRan 9 tests\n\nOK\nshellcheck: 2 issues"),
+            session_id="s1"))
+        self.assertIsNotNone(
+            self.fx.state().get("contested"),
+            "re-running the same STILL-FAILING command was read as green, because an "
+            "earlier stage printed OK, and it cleared a real contest")
+
+    def test_a_runner_reporting_failure_is_believed_over_a_zero_exit(self):
+        """The converse, and the case the mechanism exists for: the pipe hid it."""
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m pytest 2>&1 | tail -5", stdout="4 failed, 2 passed"),
+            session_id="s1"))
+        self.assertFalse(self.fx.verifications()[-1]["ok"])
+
+    def test_a_runner_named_as_an_argument_is_not_a_check(self):
+        """`grep -rn pytest .` exits 1 on no match and would be stored as a RED project
+        check, contesting an honest claim; `cat pytest.ini` exits 0 and would be stored
+        GREEN, suppressing a legitimate one. Only the QUOTED form was guarded before."""
+        cases = (
+            ("grep -rn pytest .", False, "Error: Exit code 1\nnotes.md:4: 3 failed"),
+            ("cat pytest.ini", True, "# see the run where 2 failed\n"),
+            ("grep pytest pyproject.toml", True, "12 passed baseline\n"),
+            ("ls | grep pytest", True, "pytest.ini\n9 passed\n"),
+        )
+        for cmd, ok, out in cases:
+            with self.subTest(cmd=cmd):
+                self.assertFalse(
+                    _TRACKER.is_verification(cmd),
+                    f"{cmd!r} was taken for a project check")
+                self.fx.track(self.fx.repo, dict(
+                    bash(cmd, ok=ok, stdout=out, text=out), session_id="s1"))
+        self.assertEqual(self.fx.verifications(), [])
+
+    def test_an_output_classified_red_never_says_exited_none(self):
+        """It has no exit code of its own: the runner reported the failure and the
+        shell returned the pager's 0."""
+        self._contest_with("python3 -m pytest -q | tail -5", "7 failed, 1 passed")
+        reason = self.fx.stop(self.fx.repo, "s1")["reason"]
+        self.assertNotIn("exited None", reason)
+        self.assertIn("reported failures", reason)
+
+    def test_a_legacy_state_file_does_not_break_the_ledger(self):
+        """`verifications` is a list of DICTS and merge_legacy_state unioned every list
+        with set(), raising TypeError: unhashable type -- which the caller's
+        `except (OSError, ValueError)` does not catch. In the worktree case this
+        function exists for, the tracker would silently stop recording anything."""
+        # Build a ledger first, then leave legacy state in the worktree, then fire an
+        # event that goes through _path() -- the Bash fast path deliberately skips the
+        # merge, so it is pattern-applied that trips over it.
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m pytest", stdout="2 failed, 1 passed"), session_id="s1"))
+        self.assertTrue(self.fx.verifications(), "no ledger to lose")
+        self.fx.write_state(self.fx.wt, "s1", {
+            "surfaced_keys": ["k9"],
+            "verifications": [{"at": "2026-11-14T00:00:00Z", "cmd": "pytest -q",
+                               "ok": False, "exit": 1}],
+        })
+        self.fx.track(self.fx.wt, dict(applied("worked"), session_id="s1"))
+        state = self.fx.state()
+        self.assertIn("k9", state.get("surfaced_keys", []),
+                      "the legacy merge raised and was swallowed")
+        self.assertTrue(state.get("verifications"),
+                        "the ledger was lost when legacy state was merged")
+        self.assertIsNotNone(state.get("contested"),
+                             "the contest did not survive the merge")
 
 
 if __name__ == "__main__":

@@ -845,9 +845,29 @@ own audits always used the line-local gate.
    stayed true through an unmutated second copy of the same masking logic) and both
    were rewritten against an observable.
 
-   The lesson is cheap to state and was expensive to find twice: **measure a detector
-   against the real corpus before believing it works.** Both review rounds turned on
-   that and neither turned on reading the code.
+   A third round found five more, three of which could each silently defeat the
+   central guarantee. Two were earlier fixes returning through a different door: the
+   contest was compared by *status segment*, and the status segment of any piped
+   command is the pager, so a green `ruff check . | tail` cleared a contest raised by a
+   red `pytest | tail` — the any-green-clears bug again, for the exact piping form the
+   module calls dominant. And a green summary printed by an *earlier stage* of a failing
+   script (`make check` emitting unittest's `OK` before shellcheck fails) was recorded
+   green, so re-running that still-failing command cleared a real contest. The third
+   was a crash: the ledger is a list of dicts and `merge_legacy_state` unioned every
+   list with `set()`, raising `TypeError: unhashable type` — uncaught, in exactly the
+   worktree case that function exists for.
+
+   Final coverage, replayed over 56,691 real command/result pairs: **7,966 invoke a
+   check, 6,232 classify (78.2%), 2,186 of them RED.**
+
+   Three rounds, sixteen defects, and **four guards caught inert by mutation** — one
+   asserted state content the slow path reproduced exactly, one stayed true through an
+   unmutated second copy of the same logic, one compared two different commands so the
+   mutation could not reach it, and one covered only one of two call sites. Two lessons,
+   both cheap to state and expensive to find repeatedly: **measure a detector against
+   the real corpus before believing it works**, and **a guard is not a guard until the
+   code it protects has been removed and the guard has been watched to fail.** None of
+   the sixteen was found by reading the code.
 
    **This is a mechanism, not a result.** The count to watch in round 10 is whether
    `applied_failed` is still 0. If it is, then the incentive argument was wrong too and

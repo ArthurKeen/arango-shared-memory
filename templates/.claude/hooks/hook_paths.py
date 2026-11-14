@@ -95,6 +95,29 @@ def legacy_state_dirs(kind=".claude"):
         yield os.path.join(base, kind, ".shared-memory-sessions")
 
 
+def _union(left, right):
+    """Union two list values of the session state, whatever they hold.
+
+    The key lists (surfaced/applied/dismissed) are lists of strings and a sorted set
+    union is exactly right for them. The verification ledger is a list of DICTS, and
+    `set()` on it raises TypeError: unhashable type -- which the caller's
+    `except (OSError, ValueError)` does not catch. That would abort the merge inside
+    the tracker on every event, in precisely the worktree case this function exists
+    for, and silently stop the hook recording anything at all.
+
+    Unhashable entries are therefore concatenated in order and de-duplicated by value,
+    keeping the ledger chronological. The last entry is what the gate reads.
+    """
+    try:
+        return sorted(set(left) | set(right))
+    except TypeError:
+        out = []
+        for item in list(left) + list(right):
+            if item not in out:
+                out.append(item)
+        return out
+
+
 def merge_legacy_state(session_id, kind=".claude"):
     """Fold any legacy state for ``session_id`` into the resolved location.
 
@@ -122,7 +145,7 @@ def merge_legacy_state(session_id, kind=".claude"):
         found = True
         for key, value in data.items():
             if isinstance(value, list):
-                merged[key] = sorted(set(merged.get(key, [])) | set(value))
+                merged[key] = _union(merged.get(key, []), value)
             else:
                 merged.setdefault(key, value)
     if not found:
@@ -133,7 +156,7 @@ def merge_legacy_state(session_id, kind=".claude"):
                 current = json.load(fh)
             for key, value in current.items():
                 if isinstance(value, list):
-                    merged[key] = sorted(set(merged.get(key, [])) | set(value))
+                    merged[key] = _union(merged.get(key, []), value)
                 else:
                     merged[key] = value
         ensure_private_dir(os.path.dirname(target))

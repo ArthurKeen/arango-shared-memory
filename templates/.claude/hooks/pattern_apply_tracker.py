@@ -42,7 +42,12 @@ from hook_paths import (  # noqa: E402
 #: Commands whose exit status is a verdict on the working tree rather than a lookup.
 _RUNNER = r"(?:(?:uv|poetry|pdm|hatch|pipenv|rye|pnpm\s+dlx)\s+run\s+|uv\s+run\s+|npx\s+)?"
 VERIFY_RE = re.compile(
-    r"(?:^|[;&|(]\s*|\s)" + _RUNNER + r"(?:"
+    # Always applied with .match() against ONE segment, so the command position is
+    # enforced by the match itself; a leading ^ here would be redundant and, worse,
+    # misleading -- removing either alone is a no-op, which briefly made a guard for
+    # this rule look like it was passing when nothing was protecting it.
+    # Leading `FOO=1 BAR=2` assignments, then an optional environment-manager prefix.
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*" + _RUNNER + r"(?:\S*/)?(?:"
     r"(?:python[0-9.]*\s+-m\s+)?(?:pytest|unittest|tox|nox)\b"
     r"|(?:npm|yarn|pnpm|bun|deno)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b"
     r"|cargo\s+(?:test|check|clippy|build)\b"
@@ -66,6 +71,9 @@ _QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
 
 #: `||` and `&&` before the single-character forms, or they split in the wrong place.
 _SEPARATORS = re.compile(r"\|\||&&|[;|&\n]")
+
+#: A program can also start just inside `$(`, a backtick or a subshell paren.
+_SUBSHELL = re.compile(r"\$\(|[`(){}]")
 
 #: The `&` in a redirect is not a separator. Missing this cut `ruff check . > out 2>&1`
 #: at the `&`, leaving the last segment as `1` -- so redirecting output to a file, the
@@ -106,6 +114,17 @@ def status_segment(command):
     return parts[-1].strip() if parts else ""
 
 
+def segments(command):
+    """Every command position in the script, in order.
+
+    Splitting on the shell separators AND on command-substitution/subshell openers
+    gives one entry per place a program can start. `cd X && python3 -m pytest` yields
+    `cd X` and `python3 -m pytest`.
+    """
+    masked = _SUBSHELL.sub(" ", _masked(command))
+    return [p.strip() for p in _SEPARATORS.split(masked) if p.strip()]
+
+
 def mentions_runner(command):
     """True when the command invokes a check somewhere, at any shell depth.
 
@@ -116,12 +135,12 @@ def mentions_runner(command):
     preambles), so asking where in the script the runner sits is the wrong question.
     Quote masking still applies, so `grep -nE "ruff|mypy|pytest" ci.yml` is a lookup.
     """
-    return bool(VERIFY_RE.search(_masked(command)))
+    return any(VERIFY_RE.match(seg) for seg in segments(command))
 
 
 def status_is_the_checks(command):
     """True when the shell's exit status is the check's own, so it can be trusted."""
-    return bool(VERIFY_RE.search(status_segment(command)))
+    return bool(VERIFY_RE.match(status_segment(command)))
 
 
 def is_verification(command):
@@ -270,25 +289,36 @@ def verdict(payload):
         if resp.get("backgroundTaskId") or resp.get("background_task_id"):
             return None, None
 
-    # What the runner said about itself comes first, because the exit status is usually
-    # not its own: `pytest -q 2>&1 | tail -20` exits with tail's, and a compound script
-    # exits with whatever ran last. The summary line survives all of that.
     command = ""
     tool_input = _decode(payload.get("tool_input") or {})
     if isinstance(tool_input, dict):
         command = tool_input.get("command") or ""
-    said = classify_output(text)
-    if said is not None:
-        return said, (0 if said else None)
 
-    # Otherwise fall back to the exit status, and only where it IS the check's own.
+    # Did the command as a whole fail? Only the string shape carries that.
+    failure = (re.match(r"\s*(?:Error:\s*)?Exit code\s+(\d+)", resp)
+               if isinstance(resp, str) else None)
+    code = int(failure.group(1)) if failure else None
+    said = classify_output(text)
+
+    # A runner reporting its own failure is believed whatever the shell returned: a
+    # pipe through tail hides a red suite behind exit 0, which is the case this whole
+    # mechanism exists to catch.
+    if said is False:
+        return False, code
+
+    # A green summary is NOT believed when the command as a whole failed. A compound
+    # command prints each stage's output, so `make check` emitting unittest's "OK"
+    # before shellcheck fails, or `cargo test && cargo clippy`, would otherwise be
+    # recorded GREEN -- and re-running that same still-failing command would then
+    # CLEAR a real contest, which is worse than recording nothing.
+    if said is True:
+        return (None, None) if failure else (True, 0)
+
+    # No summary to read. Fall back to the exit status, and only where it IS the
+    # check's own rather than a pager's or a later unrelated command's.
     if status_is_the_checks(command):
-        if isinstance(resp, str):
-            match = re.match(r"\s*(?:Error:\s*)?Exit code\s+(\d+)", resp)
-            if match:
-                code = int(match.group(1))
-                return (code == 0), code
-            return None, None
+        if failure:
+            return False, code
         if isinstance(resp, dict) and ("stdout" in resp or "stderr" in resp):
             return True, 0
     return None, None
@@ -312,6 +342,19 @@ def _contest(state, command, code, when):
     return state["contested"]
 
 
+def _same_command(left, right):
+    """Whitespace-insensitive equality of two command lines.
+
+    Comparing status_segment() instead looked tidier and was wrong: the status segment
+    of ANY piped command is the pager, so a green `ruff check . 2>&1 | tail -20`
+    cleared a contest raised by a red `pytest ... | tail -20` -- both segments being
+    `tail -20`. That is the any-green-clears bug returning through a different door,
+    for exactly the piping form this module calls dominant.
+    """
+    return " ".join((left or "").split())[:MAX_CMD] == \
+           " ".join((right or "").split())[:MAX_CMD]
+
+
 def _clear_on_green(state, command):
     """A green re-run of THE SAME command supersedes the evidence.
 
@@ -321,7 +364,7 @@ def _clear_on_green(state, command):
     this is strict.
     """
     contested = state.get("contested")
-    if contested and status_segment(contested.get("cmd", "")) == status_segment(command):
+    if contested and _same_command(contested.get("cmd", ""), command):
         state.pop("contested", None)
 
 
@@ -436,16 +479,21 @@ def main():
             )
         contested = result["contested"]
         if contested:
+            exit_code = contested.get("exit")
             print(
                 "[SHARED-MEMORY APPLY GATE] outcome='{claimed}' stands against a RED "
-                "check: `{cmd}` exited {exit}. By this tool's own definition a pattern "
-                "FAILED if the checks it was meant to make pass are still failing. "
-                "Re-run that exact check: if it passes, this clears on its own and the "
-                "claim stands. If it still fails, call pattern-applied again with "
+                "check: `{cmd}`{exit}. By this tool's own definition a pattern FAILED "
+                "if the checks it was meant to make pass are still failing. Re-run "
+                "that exact check: if it passes, this clears on its own and the claim "
+                "stands. If it still fails, call pattern-applied again with "
                 "outcome='failed' for {keys}.".format(
                     claimed=contested.get("claimed", "worked"),
                     cmd=(contested.get("cmd") or "")[:120],
-                    exit=contested.get("exit"),
+                    # An output-classified red has no exit code of its own -- the
+                    # runner reported the failure, the shell returned the pager's 0.
+                    # "exited None" is not a thing that happened.
+                    exit=f" exited {exit_code}" if exit_code is not None
+                    else " reported failures",
                     keys=", ".join(contested.get("keys") or []) or "that key",
                 )
             )

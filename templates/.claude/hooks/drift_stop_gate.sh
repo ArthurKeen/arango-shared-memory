@@ -141,13 +141,14 @@ if contested_flag == "1":
         with open(os.path.join(state_dir(), sid + ".json")) as fh:
             c = json.load(fh).get("contested") or {}
         cmd = str(c.get("cmd") or "")[:160]
-        code = c.get("exit", "?")
+        code = c.get("exit")
         bad_keys = " ".join(c.get("keys") or [])
     except Exception:
         pass
     parts.append("[SHARED-MEMORY APPLY GATE] A reuse was recorded as outcome='worked' "
                  "while this project's own checks were RED"
-                 + (f": `{cmd}` exited {code}." if cmd else ".")
+                 + ((f": `{cmd}` exited {code}." if code is not None
+                     else f": `{cmd}` reported failures.") if cmd else ".")
                  + " Every outcome this system has ever stored is 'worked' (288 of 288), "
                  "so a success that is merely asserted is worth nothing. Resolve it with "
                  "an ACTION, not a restatement: (a) re-run that check -- if it passes, "
