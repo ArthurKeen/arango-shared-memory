@@ -22,7 +22,7 @@
         ]
       },
       {
-        "matcher": "mcp__arangodb-memory-mcp__(pattern-search|pattern-applied)",
+        "matcher": "Bash|mcp__arangodb-memory-mcp__(pattern-search|pattern-applied)",
         "hooks": [
           {
             "type": "command",

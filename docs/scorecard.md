@@ -803,14 +803,32 @@ own audits always used the line-local gate.
 
 **Ranked for round 9 (2026-11-13):**
 
-1. **Make recording a failure something that happens, not something that is offered.**
-   136 outcomes since round 8, all `worked`, with the capability live and named in every
-   gate message. Documentation has now been tried and has failed; the next attempt has
-   to change the incentive — deriving the outcome from evidence the agent cannot assert
-   (tests still red, the change reverted, the alert reopened) rather than asking for it.
-2. **Raise the CDF enablement PR.** Named as the highest-leverage adoption action in
-   rounds 8 and 9 and still not raised. ~90% search concentration will not move while
-   the other readers work in the one project without the hooks.
+1. ~~**Make recording a failure something that happens, not something that is offered.**~~
+   **SHIPPED 2026-11-14 — not yet proven.** Two changes. (a) `outcome` lost its
+   `"worked"` default: omitting it is now an `outcome_required` error, so a positive
+   signal is no longer what an agent gets for not considering the question. (b) The
+   apply tracker keeps a verification ledger — the exit status of the session's own
+   test/lint/typecheck runs — and a `worked` claim made while the last one was RED is
+   CONTESTED: the Stop gate blocks, names the failing command, and offers two
+   resolutions that are both actions (re-run the check and go green, which supersedes
+   the evidence and clears the contest; or record `outcome='failed'`). Restating
+   "worked" resolves nothing. Detection is shape-based — Claude Code returns a dict for
+   a passing command and the string `"Error: Exit code N"` for a failing one, confirmed
+   against stored transcripts — and anything it cannot classify confidently is not
+   treated as evidence, because contesting an honest claim is worse than missing a
+   dishonest one.
+
+   **This is a mechanism, not a result.** The count to watch in round 10 is whether
+   `applied_failed` is still 0. If it is, then the incentive argument was wrong too and
+   the remaining explanation is that reuse here genuinely never fails — which, at
+   299 applies, would itself need explaining. Cursor has no equivalent yet: its
+   `postToolUse` payload shape for shell commands is unconfirmed, and this was not
+   worth guessing at after the Claude shape was verified rather than assumed.
+2. ~~**Raise the CDF enablement PR.**~~ **RAISED 2026-11-13** as
+   contextual-data-fabric#365, three months after the C2 note said it should be. Checks
+   green, mergeable, no review yet. It is not this project's to merge, so the action is
+   complete and the outcome is not. ~90% search concentration will not move until it
+   lands.
 3. ~~**Repair `open_gaps` for the 9 drifted projects.**~~ **DONE 2026-11-13.** All
    nine now read 0. `project-sentinel` still differs (10 vs 1) and is deliberately not
    repaired — it is not dormant, so `/prd-sync` owns that counter.

@@ -60,6 +60,12 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
 - **REQ-025** When a memory's text (`problem_description` / `solution_summary`) is
   edited, its embedding MUST be refreshed: the update sets `embedding_pending: true`
   and the next embedding pass re-embeds it.
+- **REQ-026** The apply outcome MUST be capable of being negative in practice, not only
+  in principle. `outcome` has no default — omitting it is an error, never a success —
+  and a `worked` claim made while the project's own checks are failing MUST be
+  contested rather than stored unexamined. Rationale: the ranking multiplies relevance
+  by `(0.6 + 0.4 * success_rate)`, so while every recorded outcome is `worked` that
+  term is a constant and the factor ranks nothing (288 of 288 as of 2026-11-14).
 
 ## 4. Session-start recall
 
@@ -138,6 +144,16 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
   `pattern-search`, clear keys recorded by `pattern-applied`, and issue at most one Stop
   follow-up when attribution is missing. It MUST NOT auto-apply every surfaced key:
   viewing a result is not evidence that it influenced the solution.
+- **REQ-075** The Stop gate MUST also block on a CONTESTED apply: reuse recorded as
+  `worked` while the last verification command in the session exited non-zero. The block
+  MUST name the failing command and offer two resolutions that are actions rather than
+  restatements — re-run the check (green supersedes the evidence and clears the contest)
+  or record `outcome='failed'`. The same rails as REQ-070 apply, so a contest can never
+  trap a session. Evidence is read only from commands whose exit status is a verdict on
+  the tree, and any result the hook cannot classify with confidence is not evidence:
+  contesting an honest claim is worse than missing a dishonest one. This does NOT infer
+  apply events — the agent still declares the reuse (REQ-074); only the sign of a claim
+  it has already made is checked.
 
 ## 9. Lifecycle and scheduled maintenance
 

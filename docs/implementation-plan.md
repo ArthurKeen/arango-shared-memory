@@ -83,6 +83,13 @@ These once-deferred server-side items are now implemented in `arango-solutions-m
 - **Fully inferred `pattern-applied` writes** — deliberately excluded because neither the
   server nor a deterministic hook can prove that a surfaced result influenced the solution.
   The shipped attribution gate prompts the agent once and records only explicit reuse.
+  Still excluded as of 2026-11-14, and the evidence check added that day does not cross
+  this line: nothing invents an apply event or infers influence. The agent declares the
+  reuse exactly as before. What changed is that the SIGN of a claim it has already made
+  is checked against the project's own test and lint exit codes, which the agent did not
+  author. The distinction matters because the two look similar and only one is sound —
+  "this result was reused" is unknowable from the outside, while "the checks were red
+  when you called it a success" is simply observable.
 
 ## Verification
 
