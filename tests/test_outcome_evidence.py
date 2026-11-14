@@ -45,7 +45,7 @@ def applied(outcome="worked", keys=("k1",)):
             "tool_input": {"keys": list(keys), "outcome": outcome}}
 
 
-def bash(command, ok=True, code=1, interrupted=False):
+def bash(command, ok=True, code=1, interrupted=False, background=False):
     """A PostToolUse Bash payload in the two shapes Claude Code actually produces.
 
     Confirmed against stored transcripts, not assumed: a command that SUCCEEDS comes
@@ -57,6 +57,8 @@ def bash(command, ok=True, code=1, interrupted=False):
     if ok:
         response = {"stdout": "ok", "stderr": "", "interrupted": interrupted,
                     "isImage": False, "noOutputExpected": False}
+        if background:
+            response["backgroundTaskId"] = "bg-1"
     else:
         response = f"Error: Exit code {code}\nsome failing output"
     return {"tool_name": "Bash", "tool_input": {"command": command},
@@ -255,6 +257,97 @@ class TestTheGuardsFailWhenTheMechanismIsRemoved(unittest.TestCase):
         self.assertIsNone(
             fx.state_files("m1").get("repo", {}).get("contested"),
             "the mutation did not disable the check, so the guards above prove nothing")
+
+
+class TestWhatTheShellActuallyReports(unittest.TestCase):
+    """Findings from the review of this change. Each one was reproduced end to end
+    before being fixed, and each is pinned here because every one of them would have
+    left the mechanism reporting success while measuring nothing -- or, worse,
+    contesting honest claims, which is the failure mode that actively pushes an agent
+    toward recording a fabricated 'failed'."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def test_a_piped_test_run_is_not_read_as_passing(self):
+        """`pytest -q 2>&1 | tail -20` exits 0 when tail does, however many tests
+        failed. Piping test output through tail or head is the dominant form in real
+        transcripts, so reading the pipeline's status as the suite's would have made
+        false greens the common case -- and a false green does not merely miss a
+        contest, it CLEARS one."""
+        self.fx.track(self.fx.repo,
+                      dict(bash("pytest -q 2>&1 | tail -20"), session_id="s1"))
+        self.assertEqual(self.fx.verifications(), [])
+
+    def test_a_piped_green_cannot_clear_a_contest(self):
+        self.fx.track(self.fx.repo, dict(bash("pytest -q", ok=False), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.fx.track(self.fx.repo,
+                      dict(bash("pytest -q 2>&1 | tail -20"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+
+    def test_redirecting_output_to_a_file_still_counts(self):
+        """The thing one does INSTEAD of piping through tail. Masking the `&` in `2>&1`
+        is what keeps this from being cut at the redirect."""
+        self.fx.track(self.fx.repo,
+                      dict(bash("python3 -m pytest > /tmp/s.out 2>&1", ok=False),
+                           session_id="s1"))
+        self.assertEqual(len(self.fx.verifications()), 1)
+        self.assertFalse(self.fx.verifications()[-1]["ok"])
+
+    def test_a_pipe_inside_a_quoted_regex_is_not_a_pipeline(self):
+        """`grep -nE "ruff|mypy|pytest" ci.yml` is a lookup. Reading the `|mypy` as a
+        pipeline segment made grep-exits-1-on-no-match look like a red type check, so
+        an honest success was contested and the session blocked naming a grep as the
+        project's failing suite."""
+        self.fx.track(self.fx.repo,
+                      dict(bash('grep -nE "ruff|mypy|pytest" ci.yml', ok=False),
+                           session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.assertEqual(self.fx.verifications(), [])
+        self.assertIsNone(self.fx.state().get("contested"),
+                          "an honest claim was contested by a grep")
+
+    def test_a_red_check_arriving_after_the_claim_still_contests_it(self):
+        """The ordering templates/CLAUDE.md actually prescribes: record the reuse
+        immediately, then keep working. Computing the contest only when pattern-applied
+        fires left the mechanism inert in the project's own mandated workflow."""
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(bash("pytest -q", ok=False), session_id="s1"))
+        contested = self.fx.state().get("contested")
+        self.assertIsNotNone(contested, "a red check after the claim did not contest it")
+        self.assertEqual(contested["keys"], ["k1"])
+        self.assertEqual(self.fx.stop(self.fx.repo, "s1")["decision"], "block")
+
+    def test_a_green_run_of_a_different_check_does_not_clear_the_contest(self):
+        """The block says "re-run that check". Any-green-clears meant `ruff check .`
+        resolved a contest raised over a still-red pytest."""
+        self.fx.track(self.fx.repo, dict(bash("pytest -q", ok=False), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(bash("ruff check ."), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        self.fx.track(self.fx.repo, dict(bash("pytest -q"), session_id="s1"))
+        self.assertIsNone(self.fx.state().get("contested"))
+
+    def test_a_backgrounded_run_is_not_a_verdict(self):
+        """It returns the moment it is launched; the suite has not finished."""
+        self.fx.track(self.fx.repo,
+                      dict(bash("pytest -q", background=True), session_id="s1"))
+        self.assertEqual(self.fx.verifications(), [])
+
+    def test_recording_a_failure_for_another_key_leaves_the_contest_standing(self):
+        self.fx.track(self.fx.repo,
+                      dict(SEARCH, session_id="s1",
+                           tool_response={"patterns": [{"_key": "k2"}]}))
+        self.fx.track(self.fx.repo, dict(bash("pytest -q", ok=False), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked", keys=("k1",)), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("failed", keys=("k2",)), session_id="s1"))
+        contested = self.fx.state().get("contested")
+        self.assertIsNotNone(contested, "a failure for k2 cleared the contest about k1")
+        self.assertEqual(contested["keys"], ["k1"])
 
 
 if __name__ == "__main__":
