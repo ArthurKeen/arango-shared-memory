@@ -830,6 +830,25 @@ own audits always used the line-local gate.
    working. That last one is the pattern worth carrying forward — a guard can pass
    every test written for it and still never fire in the workflow it was built for.
 
+   A second review round then found the first fix had created a worse version of the
+   same fault. Requiring the check to own the shell's exit status — the correct way to
+   avoid reading `pytest | tail` as a pass — recognised **10 of the 13,299
+   runner-invoking commands in 69,167 real Bash calls, 0.1%**, and **0 of 824 in this
+   repository**. It would have shipped, passed every test, and never fired once.
+   Real agent commands are whole shell programs (`cd X && … <<PY … PY`, loops,
+   `S=$(mktemp)` preambles, output piped to `tail`), so asking *where in the script*
+   the runner sits is the wrong question. The verdict now comes from what the runner
+   **says** — its own summary line, which survives pipes, loops and heredocs — with the
+   exit status as a fallback where it is the check's own. Replayed over the same
+   corpus: **75.5% classify, 2,297 of them RED.** Two further guards were caught inert
+   by mutation (one asserted state content that the slow path reproduced exactly; one
+   stayed true through an unmutated second copy of the same masking logic) and both
+   were rewritten against an observable.
+
+   The lesson is cheap to state and was expensive to find twice: **measure a detector
+   against the real corpus before believing it works.** Both review rounds turned on
+   that and neither turned on reading the code.
+
    **This is a mechanism, not a result.** The count to watch in round 10 is whether
    `applied_failed` is still 0. If it is, then the incentive argument was wrong too and
    the remaining explanation is that reuse here genuinely never fails — which, at

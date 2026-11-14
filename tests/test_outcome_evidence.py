@@ -45,7 +45,8 @@ def applied(outcome="worked", keys=("k1",)):
             "tool_input": {"keys": list(keys), "outcome": outcome}}
 
 
-def bash(command, ok=True, code=1, interrupted=False, background=False):
+def bash(command, ok=True, code=1, interrupted=False, background=False,
+         stdout="ok", text=None):
     """A PostToolUse Bash payload in the two shapes Claude Code actually produces.
 
     Confirmed against stored transcripts, not assumed: a command that SUCCEEDS comes
@@ -55,12 +56,13 @@ def bash(command, ok=True, code=1, interrupted=False, background=False):
     that prints "FAILED" in a summary line would fool any text heuristic.
     """
     if ok:
-        response = {"stdout": "ok", "stderr": "", "interrupted": interrupted,
+        response = {"stdout": stdout, "stderr": "", "interrupted": interrupted,
                     "isImage": False, "noOutputExpected": False}
         if background:
             response["backgroundTaskId"] = "bg-1"
     else:
-        response = f"Error: Exit code {code}\nsome failing output"
+        response = text if text is not None else (
+            f"Error: Exit code {code}\nsome failing output")
     return {"tool_name": "Bash", "tool_input": {"command": command},
             "tool_response": response}
 
@@ -303,8 +305,14 @@ class TestWhatTheShellActuallyReports(unittest.TestCase):
         pipeline segment made grep-exits-1-on-no-match look like a red type check, so
         an honest success was contested and the session blocked naming a grep as the
         project's failing suite."""
+        # The output deliberately contains a red summary marker. Without quote
+        # masking the `|mypy` reads as a pipeline segment, the grep is taken for a type
+        # check, and the line it printed is then read as that check's verdict. An
+        # earlier version of this guard asserted only that nothing was recorded, which
+        # stayed true via a different code path and made the test inert.
         self.fx.track(self.fx.repo,
-                      dict(bash('grep -nE "ruff|mypy|pytest" ci.yml', ok=False),
+                      dict(bash('grep -nE "ruff|mypy|pytest" ci.yml', ok=False,
+                                text="Error: Exit code 1\nci.yml:12: 3 failed"),
                            session_id="s1"))
         self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
         self.assertEqual(self.fx.verifications(), [])
@@ -348,6 +356,122 @@ class TestWhatTheShellActuallyReports(unittest.TestCase):
         contested = self.fx.state().get("contested")
         self.assertIsNotNone(contested, "a failure for k2 cleared the contest about k1")
         self.assertEqual(contested["keys"], ["k1"])
+
+
+class TestItActuallyFiresOnRealCommands(unittest.TestCase):
+    """Second review round. The headline finding was that the detector was inert.
+
+    Requiring the check to own the shell's exit status recognised 10 of the 13,299
+    runner-invoking commands in 69,167 real Bash calls -- 0.1%. Real agent commands are
+    whole shell programs: `cd X && ... <<PY ... PY`, `for ... done`, `S=$(mktemp)`
+    preambles, output piped to tail. Shipping that would have put "mechanism deployed"
+    in the scorecard while it provably never fired, and round 10 could not have told
+    that apart from "the incentive argument was wrong".
+
+    So the verdict now comes from what the runner SAYS -- its own summary line, which
+    survives pipes, loops and heredocs -- and falls back to the exit status only where
+    that status is the check's own. Replayed over the same corpus: 75.5% of
+    runner-invoking commands classify, 2,297 of them RED.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def test_a_piped_failing_suite_is_now_caught_by_its_own_summary(self):
+        """The exact form that defeated the first attempt. Exit status is tail's (0),
+        but pytest still said what happened."""
+        self.fx.track(self.fx.repo, dict(
+            bash("cd pkg && python3 -m pytest -q 2>&1 | tail -20",
+                 stdout="3 failed, 12 passed in 2.14s"), session_id="s1"))
+        entries = self.fx.verifications()
+        self.assertEqual(len(entries), 1, "a piped failing suite still went unseen")
+        self.assertFalse(entries[-1]["ok"])
+
+    def test_a_heredoc_script_that_runs_tests_is_classified(self):
+        self.fx.track(self.fx.repo, dict(
+            bash("S=$(mktemp -d); cd $S && python3 -m unittest discover tests "
+                 "> /tmp/o 2>&1; cat /tmp/o",
+                 stdout="Ran 211 tests in 13.8s\n\nFAILED (failures=2)"),
+            session_id="s1"))
+        self.assertFalse(self.fx.verifications()[-1]["ok"])
+
+    def test_a_green_summary_is_read_as_green(self):
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m unittest discover tests 2>&1 | tail -3",
+                 stdout="Ran 211 tests in 13.8s\n\nOK (skipped=2)"), session_id="s1"))
+        self.assertTrue(self.fx.verifications()[-1]["ok"])
+
+    def test_a_timeout_is_not_a_failing_suite(self):
+        """It arrives as "Error: Exit code 143 / Command timed out after 2m 0s", and
+        the dict-shape `interrupted` flag never accompanies it. Read as a clean RED, a
+        suite that merely ran long would contest an honest claim."""
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m pytest", ok=False,
+                 text="Error: Exit code 143\nCommand timed out after 2m 0s"),
+            session_id="s1"))
+        self.assertEqual(self.fx.verifications(), [])
+
+    def test_ruff_format_is_not_a_verdict_on_the_code(self):
+        """`ruff format` rewrites files; `--check` exits 1 when a file merely WOULD be
+        reformatted. Neither says the code is wrong."""
+        self.fx.track(self.fx.repo,
+                      dict(bash("ruff format --check .", ok=False), session_id="s1"))
+        self.assertEqual(self.fx.verifications(), [])
+        self.fx.track(self.fx.repo,
+                      dict(bash("ruff check .", ok=False), session_id="s1"))
+        self.assertEqual(len(self.fx.verifications()), 1)
+
+    def test_zero_failures_is_not_a_failure(self):
+        self.fx.track(self.fx.repo,
+                      dict(bash("pytest -q", stdout="0 failed, 9 passed"),
+                           session_id="s1"))
+        self.assertTrue(self.fx.verifications()[-1]["ok"])
+
+    def test_the_word_failed_in_passing_output_is_not_a_summary_line(self):
+        """The whole reason detection is not a grep for "error" or "FAILED": a passing
+        run that prints the word in a diff, a docstring or a test NAME must stay green."""
+        self.fx.track(self.fx.repo, dict(
+            bash("pytest -q",
+                 stdout="test_reports_FAILED_banner PASSED\n9 passed in 0.3s"),
+            session_id="s1"))
+        self.assertTrue(self.fx.verifications()[-1]["ok"])
+
+    def test_a_long_command_can_still_be_cleared_by_re_running_it(self):
+        """The contest stored cmd[:200] while clearing compared the full command, so
+        any check whose line exceeded 200 chars could never be resolved by re-running
+        it -- leaving a false `failed` as the only way out of the gate."""
+        long_cmd = ("cd pkg && python3 -m pytest " + "-k not_slow " * 20).strip()
+        self.assertGreater(len(long_cmd), 200)
+        self.fx.track(self.fx.repo,
+                      dict(bash(long_cmd, stdout="2 failed, 1 passed"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        self.fx.track(self.fx.repo,
+                      dict(bash(long_cmd, stdout="3 passed"), session_id="s1"))
+        self.assertIsNone(self.fx.state().get("contested"),
+                          "re-running the exact same check did not clear the contest")
+
+    def test_bashoutput_polls_do_not_take_the_slow_path(self):
+        """`Bash` as an unanchored regex alternative also selects `BashOutput`, which
+        polls a background task. settings.json is anchored now, but installed projects
+        carry their own copy, so the hook refuses the name too."""
+        # Comparing state CONTENT proves nothing here: the slow path loads the file
+        # and writes it back unchanged, so an inert version of this test passed with
+        # the guard removed. The observable is the write itself -- _save swaps in a new
+        # file via os.replace, so taking the slow path changes the inode.
+        path = os.path.join(self.fx.repo, ".claude", ".shared-memory-sessions",
+                            "s1.json")
+        before = os.stat(path)
+        self.fx.track(self.fx.repo, {
+            "tool_name": "BashOutput", "session_id": "s1",
+            "tool_input": {"bash_id": "bg-1"},
+            "tool_response": {"stdout": "9 failed", "stderr": ""}})
+        after = os.stat(path)
+        self.assertEqual(before.st_ino, after.st_ino,
+                         "BashOutput took the slow path and rewrote the state file")
 
 
 if __name__ == "__main__":

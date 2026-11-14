@@ -42,14 +42,14 @@ from hook_paths import (  # noqa: E402
 #: Commands whose exit status is a verdict on the working tree rather than a lookup.
 _RUNNER = r"(?:(?:uv|poetry|pdm|hatch|pipenv|rye|pnpm\s+dlx)\s+run\s+|uv\s+run\s+|npx\s+)?"
 VERIFY_RE = re.compile(
-    # Leading `FOO=1 BAR=2` assignments, then an optional environment-manager prefix.
-    r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*" + _RUNNER + r"(?:"
+    r"(?:^|[;&|(]\s*|\s)" + _RUNNER + r"(?:"
     r"(?:python[0-9.]*\s+-m\s+)?(?:pytest|unittest|tox|nox)\b"
     r"|(?:npm|yarn|pnpm|bun|deno)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b"
     r"|cargo\s+(?:test|check|clippy|build)\b"
     r"|go\s+(?:test|vet|build)\b"
     r"|(?:make|just)\s+(?:test|tests|check|lint|verify|ci|typecheck)\b"
-    r"|(?:ruff|mypy|pyright|pylint|flake8|eslint|tsc|shellcheck|bats|rspec|jest|vitest|phpunit)\b"
+    r"|ruff\s+check\b"
+    r"|(?:mypy|pyright|pylint|flake8|eslint|tsc|shellcheck|bats|rspec|jest|vitest|phpunit)\b"
     r"|dotnet\s+test\b|mvn\s+[\w:-]*test|gradlew?\s+[\w:-]*test"
     r"|git\s+bisect\s+run\b"
     r")",
@@ -75,6 +75,18 @@ _REDIRECT_AMP = re.compile(r"([<>])&")
 #: Bounded, like apply_log server-side. The gate only ever reads the last entry.
 MAX_VERIFICATIONS = 20
 
+#: One truncation length for every place a command is stored, because _clear_on_green
+#: compares a contest's command against a later run's. Two different lengths meant a
+#: check whose line exceeded the shorter one could never be cleared by re-running it,
+#: leaving a false `failed` as the only way out of the gate. Generous: this is a local
+#: state file holding at most MAX_VERIFICATIONS entries.
+MAX_CMD = 1000
+
+
+def _masked(command):
+    """The command with quoted spans blanked, for structural inspection."""
+    return _REDIRECT_AMP.sub(r"\1 ", _QUOTED.sub(" ", command or ""))
+
 
 def status_segment(command):
     """The part of a command line whose exit status the shell actually reports.
@@ -89,14 +101,32 @@ def status_segment(command):
     tail` does not, and is treated as no evidence rather than as a pass. Conservative
     on purpose: `set -o pipefail` would change the answer and is not knowable here.
     """
-    masked = _REDIRECT_AMP.sub(r"\1 ", _QUOTED.sub(" ", command or ""))
+    masked = _masked(command)
     parts = [p for p in _SEPARATORS.split(masked) if p.strip()]
     return parts[-1].strip() if parts else ""
 
 
-def is_verification(command):
-    """True when the exit status of `command` is a verdict on the tree."""
+def mentions_runner(command):
+    """True when the command invokes a check somewhere, at any shell depth.
+
+    Deliberately NOT "the check is the thing whose exit status we get". Measured
+    against 69,167 real Bash calls from local transcripts: 13,299 invoke a runner, and
+    requiring it to own the exit status recognised 10 of them -- 0.1%. Real agent
+    commands are whole shell programs (`cd X && ... <<PY ... PY`, loops, `S=$(mktemp)`
+    preambles), so asking where in the script the runner sits is the wrong question.
+    Quote masking still applies, so `grep -nE "ruff|mypy|pytest" ci.yml` is a lookup.
+    """
+    return bool(VERIFY_RE.search(_masked(command)))
+
+
+def status_is_the_checks(command):
+    """True when the shell's exit status is the check's own, so it can be trusted."""
     return bool(VERIFY_RE.search(status_segment(command)))
+
+
+def is_verification(command):
+    """Kept as the ledger's gate: does this command run a check at all."""
+    return mentions_runner(command)
 
 
 def _event_id(payload):
@@ -156,6 +186,55 @@ def _save(path, state):
             pass
 
 
+#: What a check SAYS about itself, for the common case where its exit status is lost.
+#: These are summary forms emitted by the runners named in VERIFY_RE, not words that
+#: happen to appear in output: a passing run that prints "FAILED" inside a diff or a
+#: docstring matches none of them. Consulted only when the command demonstrably invokes
+#: a runner, which keeps `cat failures.log` from being read as a test result.
+_RED_OUTPUT = re.compile(
+    r"FAILED\s*\((?:failures|errors)="            # unittest
+    r"|\b[1-9]\d*\s+failed\b"                    # pytest / jest summary line
+    r"|^=+\s*FAILURES\s*=+"                       # pytest section header
+    r"|\btest result:\s*FAILED\b"                 # cargo
+    r"|\berror\s+TS\d+"                           # tsc
+    r"|\bFound\s+[1-9]\d*\s+error"               # ruff / tsc
+    r"|^FAIL\s"                                    # go test / jest
+    r"|\b[1-9]\d*\s+problems?\s*\(\s*[1-9]\d*\s+error",   # eslint
+    re.MULTILINE,
+)
+_GREEN_OUTPUT = re.compile(
+    r"^OK\s*(?:\(|$)"                              # unittest
+    r"|\b\d+\s+passed\b"                          # pytest / jest
+    r"|\btest result:\s*ok\b"                      # cargo
+    r"|\bAll checks passed"                         # ruff
+    r"|\bFound 0 errors"                            # tsc
+    r"|^PASS\s",                                    # jest / go
+    re.MULTILINE,
+)
+
+
+def _response_text(resp):
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, dict):
+        return "\n".join(str(resp.get(k) or "") for k in ("stdout", "stderr"))
+    return ""
+
+
+def classify_output(text):
+    """True/False from what a runner reported, or None when it said nothing clear.
+
+    Red is tested first so "1 failed, 7 passed" reads as a failure rather than a pass.
+    """
+    if not text:
+        return None
+    if _RED_OUTPUT.search(text):
+        return False
+    if _GREEN_OUTPUT.search(text):
+        return True
+    return None
+
+
 def verdict(payload):
     """(passed, exit_code) for a Bash call, or (None, None) when it is not a verdict.
 
@@ -173,21 +252,44 @@ def verdict(payload):
     if isinstance(tool_input, dict) and tool_input.get("run_in_background"):
         return None, None
     resp = payload.get("tool_response", payload.get("tool_output"))
-    if isinstance(resp, str):
-        match = re.match(r"\s*(?:Error:\s*)?Exit code\s+(\d+)", resp)
-        if match:
-            code = int(match.group(1))
-            return (code == 0), code
+    text = _response_text(resp)
+
+    # A timeout is not a failing suite. It arrives as the string "Error: Exit code 143
+    # \nCommand timed out after 2m 0s" -- the `interrupted` key is a dict-shape flag
+    # that never accompanies it (0 of 29,882 dict results in local transcripts carried
+    # it, while all 18 timeouts came through as the 143 string). Read as a clean RED,
+    # a pytest run that merely exceeded the Bash timeout would contest an honest claim.
+    if re.search(r"Command timed out|timed out after", text):
         return None, None
     if isinstance(resp, dict):
         if resp.get("interrupted"):
-            return None, None   # killed by the user or a timeout: no verdict
+            return None, None   # killed by the user: no verdict
         # A backgrounded run returns the moment it is launched. Its exit status is not
         # in this payload and the suite has not finished, so reading it as a pass would
         # log a green check for a test run that may be about to fail.
         if resp.get("backgroundTaskId") or resp.get("background_task_id"):
             return None, None
-        if "stdout" in resp or "stderr" in resp:
+
+    # What the runner said about itself comes first, because the exit status is usually
+    # not its own: `pytest -q 2>&1 | tail -20` exits with tail's, and a compound script
+    # exits with whatever ran last. The summary line survives all of that.
+    command = ""
+    tool_input = _decode(payload.get("tool_input") or {})
+    if isinstance(tool_input, dict):
+        command = tool_input.get("command") or ""
+    said = classify_output(text)
+    if said is not None:
+        return said, (0 if said else None)
+
+    # Otherwise fall back to the exit status, and only where it IS the check's own.
+    if status_is_the_checks(command):
+        if isinstance(resp, str):
+            match = re.match(r"\s*(?:Error:\s*)?Exit code\s+(\d+)", resp)
+            if match:
+                code = int(match.group(1))
+                return (code == 0), code
+            return None, None
+        if isinstance(resp, dict) and ("stdout" in resp or "stderr" in resp):
             return True, 0
     return None, None
 
@@ -204,7 +306,7 @@ def _contest(state, command, code, when):
     if not claimed:
         return None
     state["contested"] = {
-        "keys": claimed, "cmd": command[:200], "exit": code,
+        "keys": claimed, "cmd": (command or "")[:MAX_CMD], "exit": code,
         "at": when, "claimed": "worked",
     }
     return state["contested"]
@@ -249,6 +351,15 @@ def update(payload):
     name = str(payload.get("tool_name") or "").lower().replace("_", "-")
     out = {"surfaced": [], "contested": None}
 
+    # Defence in depth for an unanchored matcher. `Bash` as a regex alternative also
+    # selects `BashOutput`, which polls a background task -- that name misses the fast
+    # path below and would take the slow one (merge_legacy_state, a `git worktree list`
+    # subprocess when CLAUDE_PROJECT_DIR is unset, and a state rewrite) on every poll.
+    # settings.json is anchored now, but installed projects carry their own copy.
+    if name != "bash" and not (name.endswith("pattern-search")
+                               or name.endswith("pattern-applied")):
+        return out
+
     if name == "bash":
         # Fast path: no git subprocess and no legacy merge, because this now runs on
         # EVERY Bash call in every bootstrapped project. With no state file there has
@@ -268,7 +379,7 @@ def update(payload):
         if not state.get("surfaced_keys"):
             return out
         entries = [e for e in state.get("verifications", []) if isinstance(e, dict)]
-        entries.append({"at": _now(), "cmd": command[:200], "ok": bool(passed),
+        entries.append({"at": _now(), "cmd": command[:MAX_CMD], "ok": bool(passed),
                         "exit": code})
         state["verifications"] = entries[-MAX_VERIFICATIONS:]
         if passed:
