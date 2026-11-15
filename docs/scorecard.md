@@ -891,6 +891,31 @@ own audits always used the line-local gate.
    consecutive fixes each leave the mirror case open, stop fixing instances and derive
    the value instead.**
 
+   A fifth round found six more, and its theme is a failure mode this project has
+   already shipped once: **a gate that cannot be satisfied.** Counting only
+   `applied_keys` once made the apply gate demand that every surfaced key be applied,
+   which its own message forbade. Keying contests on the exact command line was the
+   same mistake in a new place — re-run the suite with one more flag, a narrower path,
+   or piped to `tail` this time, and the green was recorded while the contest stood
+   forever, leaving a fabricated `outcome='failed'` as the only exit. Contests are now
+   keyed on the check's *identity* (`pytest`, `ruff check`), which is the middle ground
+   between that and the any-green-clears bug of round 3. Also: checks run **before** the
+   first `pattern-search` were dropped, so the ordinary order — reproduce the failure,
+   search, apply, claim — contested nothing; `pytest -q &` was logged green with the
+   suite still running; and `_rejected()` missed the very error shape this change
+   introduces, so REQ-026's `outcome_required` would have been recorded as a success.
+
+   One finding was **declined**: `state_dir()` forks `git worktree list` when
+   `CLAUDE_PROJECT_DIR` is absent, and checking the cwd first would avoid it. It would
+   also be a second place that builds the state path — precisely what
+   `test_no_hook_builds_the_path_itself` forbids, and precisely the cause of the
+   worktree split that put surfaced keys in one file and applied keys in another.
+   Claude Code sets that variable for every hook, so the fork is rare; a perf nicety
+   does not justify reopening that bug class. The guard caught the attempt, which is
+   the best evidence in this whole exercise that these tests are load-bearing.
+
+   **Five rounds, twenty-eight defects, none found by reading the code.**
+
    **This is a mechanism, not a result.** The count to watch in round 10 is whether
    `applied_failed` is still 0. If it is, then the incentive argument was wrong too and
    the remaining explanation is that reuse here genuinely never fails — which, at

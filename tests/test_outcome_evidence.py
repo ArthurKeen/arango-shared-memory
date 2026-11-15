@@ -125,15 +125,31 @@ class TestVerificationLedger(unittest.TestCase):
                 self.fx.track(self.fx.repo, dict(bash(cmd), session_id="s1"))
                 self.assertEqual(self.fx.verifications()[-1]["cmd"], cmd)
 
-    def test_bash_before_any_pattern_search_writes_nothing(self):
-        """This hook now runs on EVERY Bash call in every bootstrapped project. With no
-        search this session there is no claim to check, so it must not create state (or
-        pay for a git subprocess) on the way to doing nothing."""
+    def test_an_ordinary_bash_call_writes_nothing(self):
+        """This hook runs on EVERY Bash call in every bootstrapped project. Anything
+        that is not a check must cost a regex and nothing else -- no state file, no
+        git subprocess, no write."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         fresh = EvidenceFixture(tmp.name)
-        fresh.track(fresh.repo, dict(bash("pytest", ok=False), session_id="never"))
+        fresh.track(fresh.repo, dict(bash("git status --short"), session_id="never"))
         self.assertEqual(fresh.state_files("never"), {})
+
+    def test_a_check_run_before_the_first_search_is_still_recorded(self):
+        """Requiring a prior pattern-search dropped every check that ran BEFORE one,
+        which is the ordinary order: reproduce the failure, search for a pattern, apply
+        it, claim it worked. The red run came first, so nothing was ever contested and
+        the mechanism was inert in the most common workflow it has."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fresh = EvidenceFixture(tmp.name)
+        fresh.track(fresh.repo, dict(
+            bash("python3 -m pytest", stdout="2 failed, 1 passed"), session_id="pre"))
+        fresh.track(fresh.repo, dict(SEARCH, session_id="pre"))
+        fresh.track(fresh.repo, dict(applied("worked"), session_id="pre"))
+        self.assertIsNotNone(
+            fresh.state_files("pre")["repo"].get("contested"),
+            "a failure reproduced before the search left the claim uncontested")
 
 
 class TestContestedClaims(unittest.TestCase):
@@ -676,6 +692,99 @@ class TestTheContestIsDerivedNotPatched(unittest.TestCase):
         self.green(cmd, "7 passed")
         self.assertIsNone(self.fx.state().get("contested"),
                           "re-running the same long command did not clear it")
+
+
+class TestTheGateStaysSatisfiable(unittest.TestCase):
+    """Fifth review round. The theme is the failure mode this project has already
+    shipped once: a gate that cannot be satisfied. Counting only applied_keys made the
+    apply gate demand that every surfaced key be applied, which its own message
+    forbade. Keying contests on the exact command line was the same mistake in a new
+    place -- re-run the suite with one more flag and the contest stood forever, leaving
+    a fabricated `outcome='failed'` as the only exit."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def _contest(self, cmd="python3 -m pytest -q 2>&1 | tail -20"):
+        self.fx.track(self.fx.repo, dict(bash(cmd, stdout="3 failed"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+
+    def test_the_same_check_in_another_form_clears_the_contest(self):
+        for green in ("python3 -m pytest",
+                      ".venv/bin/python -m pytest tests/foo.py",
+                      "cd pkg && uv run pytest -k fast",
+                      "pytest -q 2>&1 | tail -5"):
+            with self.subTest(green=green):
+                self._contest()
+                self.fx.track(self.fx.repo,
+                              dict(bash(green, stdout="9 passed"), session_id="s1"))
+                self.assertIsNone(self.fx.state().get("contested"),
+                                  f"{green!r} is the same check and did not clear it")
+
+    def test_a_different_check_going_green_still_does_not_clear_it(self):
+        """The other half. Identity is the middle ground, not a licence."""
+        self._contest()
+        self.fx.track(self.fx.repo, dict(
+            bash("ruff check .", stdout="All checks passed!"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+
+    def test_a_shell_backgrounded_run_is_not_a_verdict(self):
+        """`pytest -q &` returns immediately with status 0, suite still running.
+        run_in_background and backgroundTaskId were guarded; `&` was not, so an
+        unfinished suite logged GREEN -- and a false green clears a real contest."""
+        self._contest()
+        self.fx.track(self.fx.repo,
+                      dict(bash("python3 -m pytest &"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+
+    def test_every_rejection_shape_is_refused(self):
+        """A rejected call stored nothing, so it is not a claim. Checking only the
+        exit-code form missed the shape THIS change produces: REQ-026's
+        `outcome_required` error would have been recorded as a success."""
+        shapes = (
+            {"result": {"error": "outcome is required",
+                        "error_code": "outcome_required"}},
+            "Error: outcome is required: pass 'worked', or 'failed'",
+            {"isError": True, "content": [{"type": "text", "text": "rejected"}]},
+            {"content": [{"type": "text",
+                          "text": '{"error_code": "invalid_outcome"}'}]},
+        )
+        for shape in shapes:
+            with self.subTest(shape=str(shape)[:40]):
+                fx = EvidenceFixture(tempfile.mkdtemp())
+                self.addCleanup(shutil.rmtree, fx.repo, True)
+                fx.track(fx.repo, dict(SEARCH, session_id="r"))
+                fx.track(fx.repo, dict(
+                    bash("python3 -m pytest", stdout="1 failed"), session_id="r"))
+                fx.track(fx.repo, {
+                    "tool_name": "mcp__arangodb-memory-mcp__pattern-applied",
+                    "session_id": "r", "tool_input": {"keys": ["k1"]},
+                    "tool_response": shape})
+                st = fx.state_files("r")["repo"]
+                self.assertIsNone(st.get("contested"))
+                self.assertEqual(st.get("worked_keys", []), [])
+
+    def test_a_successful_apply_is_still_recorded(self):
+        """The converse, or the rejection check would make the mechanism inert."""
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m pytest", stdout="1 failed"), session_id="s1"))
+        self.fx.track(self.fx.repo, {
+            "tool_name": "mcp__arangodb-memory-mcp__pattern-applied",
+            "session_id": "s1", "tool_input": {"keys": ["k1"], "outcome": "worked"},
+            "tool_response": {"result": {"applied": [{"_key": "k1"}], "count": 1,
+                                         "outcome": "worked"}}})
+        self.assertIsNotNone(self.fx.state().get("contested"))
+
+    def test_a_shortened_command_is_visibly_shortened(self):
+        """A silently truncated command invites re-running what is DISPLAYED."""
+        long_cmd = "cd pkg && python3 -m pytest " + "-k not_slow " * 30
+        self._contest(long_cmd)
+        reason = self.fx.stop(self.fx.repo, "s1")["reason"]
+        self.assertIn("\u2026", reason, "the command was truncated with no ellipsis")
 
 
 if __name__ == "__main__":

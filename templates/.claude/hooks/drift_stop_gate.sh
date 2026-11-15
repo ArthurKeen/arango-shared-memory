@@ -140,7 +140,10 @@ if contested_flag == "1":
         from hook_paths import state_dir
         with open(os.path.join(state_dir(), sid + ".json")) as fh:
             c = json.load(fh).get("contested") or {}
-        cmd = str(c.get("cmd") or "")[:160]
+        cmd = " ".join(str(c.get("cmd") or "").split())
+        # Same shortening as the tracker, and visibly marked. A silently truncated
+        # command invites re-running what is DISPLAYED, which is a different command.
+        cmd = cmd if len(cmd) <= 120 else cmd[:119] + "\u2026"
         code = c.get("exit")
         bad_keys = " ".join(c.get("keys") or [])
     except Exception:

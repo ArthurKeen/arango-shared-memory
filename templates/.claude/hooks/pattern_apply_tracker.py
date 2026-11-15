@@ -153,6 +153,11 @@ def _event_id(payload):
     return re.sub(r"[^A-Za-z0-9_.-]", "-", str(raw))[:120]
 
 
+def _cheap_state_path(sid):
+    """This session's state file. One resolver, always -- see hook_paths.state_dir."""
+    return os.path.join(state_dir(), f"{sid}.json")
+
+
 def _path(payload):
     sid = _event_id(payload)
     merge_legacy_state(sid)   # fold in state a pre-fix run split elsewhere
@@ -271,6 +276,14 @@ def verdict(payload):
     tool_input = _decode(payload.get("tool_input") or {})
     if isinstance(tool_input, dict) and tool_input.get("run_in_background"):
         return None, None
+    # `pytest -q &` returns immediately with status 0 and the suite still running.
+    # run_in_background and backgroundTaskId were guarded; the shell's own form of
+    # backgrounding was not, so an unfinished suite was logged GREEN -- and a false
+    # green clears a real contest.
+    if isinstance(tool_input, dict):
+        _cmd = tool_input.get("command")
+        if isinstance(_cmd, str) and re.search(r"&\s*$", _masked(_cmd)):
+            return None, None
     resp = payload.get("tool_response", payload.get("tool_output"))
     text = _response_text(resp)
 
@@ -325,6 +338,34 @@ def verdict(payload):
     return None, None
 
 
+def check_identity(command):
+    """Which check this command runs, independent of how it was invoked.
+
+    `python3 -m pytest -q 2>&1 | tail -20`, `.venv/bin/python -m pytest tests/foo.py`
+    and `pytest` are all the same check and must clear each other's contests. Keying
+    on the exact command line instead meant re-running a suite in any other form --
+    one more flag, a narrower path, piped to tail this time -- recorded a green and
+    left the contest standing, so the gate went on blocking an honest claim whose
+    suite was now green and `outcome='failed'` became the only way out. This project
+    has shipped an unsatisfiable gate once already; once is enough.
+
+    Still per-check, not global: a green `ruff check` must NOT clear a contest raised
+    by a red `pytest`. Identity is the middle ground between those two failures.
+    """
+    for seg in segments(command):
+        match = VERIFY_RE.match(seg)
+        if not match:
+            continue
+        token = match.group(0).lower()
+        token = re.sub(r"^(?:[a-z_][a-z0-9_]*=\S*\s+)*", "", token)     # env assignments
+        token = re.sub(r"^(?:uv|poetry|pdm|hatch|pipenv|rye|pnpm\s+dlx|npx)\s+(?:run\s+)?",
+                       "", token)                                        # runner prefix
+        token = re.sub(r"^\S*/", "", token)                              # path prefix
+        token = re.sub(r"^python[0-9.]*\s+-m\s+", "", token)            # `python -m x`
+        return " ".join(token.split())
+    return norm_command(command)
+
+
 def norm_command(command):
     """The one stored form of a command line: whitespace-collapsed, then truncated.
 
@@ -370,9 +411,11 @@ def _refresh_contest(state):
 
 def _record_check(state, command, passed, code, when):
     """Fold one verification into the ledger and the set of currently-red checks."""
-    key = norm_command(command)
+    key = check_identity(command)
+    shown = norm_command(command)
     entries = [e for e in state.get("verifications", []) if isinstance(e, dict)]
-    entries.append({"at": when, "cmd": key, "ok": bool(passed), "exit": code})
+    entries.append({"at": when, "cmd": shown, "check": key, "ok": bool(passed),
+                    "exit": code})
     state["verifications"] = entries[-MAX_VERIFICATIONS:]
     reds = dict(state.get("red_checks") or {})
     if passed:
@@ -380,7 +423,7 @@ def _record_check(state, command, passed, code, when):
         # action, not an assertion, which is the whole point of this mechanism.
         reds.pop(key, None)
     else:
-        reds[key] = {"cmd": key, "exit": code, "at": when}
+        reds[key] = {"cmd": shown, "check": key, "exit": code, "at": when}
     state["red_checks"] = reds
 
 
@@ -393,12 +436,21 @@ def _rejected(response):
     """True when the MCP server refused the call rather than recording it."""
     value = _decode(response)
     if isinstance(value, str):
-        return bool(re.match(r"\s*(?:Error:\s*)?Exit code\s+[1-9]", value))
+        # A tool error reaches the hook as plain text, with or without an exit code:
+        # "Error: ...", "Exit code 1 ...", or the server's own message. Checking only
+        # the exit-code form missed the shape this very change produces, so REQ-026's
+        # `outcome_required` error would have been recorded as a `worked` claim.
+        return bool(re.match(r"\s*(?:Error\b|Exit code\s+[1-9])", value)
+                    or "error_code" in value)
     seen = []
 
     def walk(node):
         if isinstance(node, dict):
-            if node.get("error_code") or node.get("error"):
+            if (node.get("error_code") or node.get("error")
+                    or node.get("isError") or node.get("is_error")):
+                seen.append(True)
+            text = node.get("text")
+            if isinstance(text, str) and _rejected(text):
                 seen.append(True)
             for child in node.values():
                 walk(child)
@@ -407,6 +459,15 @@ def _rejected(response):
                 walk(child)
     walk(value)
     return bool(seen)
+
+
+#: Long command lines are shown shortened. The ellipsis matters: a message that
+#: silently truncates invites re-running what is DISPLAYED, which is a different
+#: command. Clearing is keyed on the check's identity rather than the line, so any
+#: form of the same check clears it -- but the message must not imply otherwise.
+def _shorten(command, limit=120):
+    text = " ".join((command or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "\u2026"
 
 
 def _now():
@@ -432,13 +493,8 @@ def update(payload):
         return out
 
     if name == "bash":
-        # Fast path: no git subprocess and no legacy merge, because this now runs on
-        # EVERY Bash call in every bootstrapped project. With no state file there has
-        # been no pattern-search this session, so there is no claim to check.
-        sid = _event_id(payload)
-        path = os.path.join(state_dir(), f"{sid}.json")
-        if not os.path.isfile(path):
-            return out
+        # Cheapest discriminator first: this hook runs on EVERY Bash call in every
+        # bootstrapped project, and the overwhelming majority are not checks.
         tool_input = _decode(payload.get("tool_input") or {})
         command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
         if not isinstance(command, str) or not is_verification(command):
@@ -446,9 +502,15 @@ def update(payload):
         passed, code = verdict(payload)
         if passed is None:
             return out
+        # Record even with nothing surfaced yet. Requiring a prior pattern-search
+        # dropped every check run BEFORE the first one, which is the ordinary order:
+        # reproduce the failure, search for a pattern, apply it, claim it worked. The
+        # red run happened first, so nothing was ever contested. A ledger with no
+        # claim against it produces no contest anyway -- the contest is derived from
+        # both -- so recording early costs a small write on verification commands only.
+        sid = _event_id(payload)
+        path = _cheap_state_path(sid)
         state = _load(path)
-        if not state.get("surfaced_keys"):
-            return out
         _record_check(state, command, passed, code, _now())
         out["contested"] = _refresh_contest(state)
         _save(path, state)
@@ -511,7 +573,7 @@ def main():
                 "stands. If it still fails, call pattern-applied again with "
                 "outcome='failed' for {keys}.".format(
                     claimed=contested.get("claimed", "worked"),
-                    cmd=(contested.get("cmd") or "")[:120],
+                    cmd=_shorten(contested.get("cmd")),
                     # An output-classified red has no exit code of its own -- the
                     # runner reported the failure, the shell returned the pager's 0.
                     # "exited None" is not a thing that happened.
