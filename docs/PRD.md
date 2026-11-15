@@ -154,6 +154,13 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
   contesting an honest claim is worse than missing a dishonest one. This does NOT infer
   apply events — the agent still declares the reuse (REQ-074); only the sign of a claim
   it has already made is checked.
+- **REQ-076** REQ-075 is satisfied by the Claude hooks only. The Cursor hooks mirror
+  SessionStart recall, the file-edit drift queue and the one-pass Stop gate (REQ-073),
+  and they do NOT yet carry the verification ledger or the contest. Recorded as a known
+  gap rather than implied parity: Cursor's `postToolUse` payload for shell commands is
+  unconfirmed, and the Claude shape was established by replaying stored transcripts
+  rather than assumed. Guessing the other one immediately after doing that work would
+  be the same mistake with the evidence removed.
 
 ## 9. Lifecycle and scheduled maintenance
 

@@ -213,6 +213,7 @@ def _save(path, state):
 _RED_OUTPUT = re.compile(
     r"FAILED\s*\((?:failures|errors)="            # unittest
     r"|\b[1-9]\d*\s+failed\b"                    # pytest / jest summary line
+    r"|\b[1-9]\d*\s+errors?\b"                    # pytest collection errors: "5 passed, 1 error"
     r"|^=+\s*FAILURES\s*=+"                       # pytest section header
     r"|\btest result:\s*FAILED\b"                 # cargo
     r"|\berror\s+TS\d+"                           # tsc
@@ -324,61 +325,88 @@ def verdict(payload):
     return None, None
 
 
-def _contest(state, command, code, when):
-    """Flag every still-standing 'worked' claim as contradicted by a red check.
+def norm_command(command):
+    """The one stored form of a command line: whitespace-collapsed, then truncated.
 
-    Evaluated on BOTH events, because either can come last. Computing it only when
-    pattern-applied fires made the mechanism inert in the workflow the project itself
-    prescribes -- templates/CLAUDE.md says to record reuse immediately, which puts the
-    claim BEFORE the test run almost every time.
+    Normalising AFTER truncating on one side and BEFORE it on the other compared
+    `normalize(raw[:MAX_CMD])` with `normalize(raw)[:MAX_CMD]`, so a long command with
+    collapsible whitespace could never clear its own contest -- the very defect a
+    single MAX_CMD was introduced to remove. One function now, and every writer of a
+    command into the state calls it.
+
+    It is the WHOLE command, never status_segment(): the status segment of any piped
+    command is the pager, so a green `ruff check . | tail -20` would otherwise clear a
+    contest raised by a red `pytest ... | tail -20`, both being `tail -20`.
+    """
+    return " ".join((command or "").split())[:MAX_CMD]
+
+
+def _refresh_contest(state):
+    """Recompute the contest from scratch. It is DERIVED, never incrementally patched.
+
+    contested = (a reuse is standing as 'worked') AND (some check is currently red).
+
+    It was computed at two places with two slightly different rules, and every
+    asymmetry between them was a bug: a red check arriving after the claim did not
+    contest it; then a green run of a DIFFERENT check cleared a contest it had nothing
+    to do with; then `pytest` red followed by `ruff check` green followed by the claim
+    produced no contest at all, because only the last ledger entry was consulted. The
+    fix for each kept leaving the mirror case open. Deriving it from the two pieces of
+    state that actually matter closes the whole class instead of the instances.
     """
     claimed = [k for k in state.get("worked_keys", []) if k]
-    if not claimed:
+    reds = state.get("red_checks") or {}
+    if not claimed or not reds:
+        state.pop("contested", None)
         return None
+    # The most recent still-red check speaks for the rest.
+    red = sorted(reds.values(), key=lambda e: e.get("at") or "")[-1]
     state["contested"] = {
-        "keys": claimed, "cmd": (command or "")[:MAX_CMD], "exit": code,
-        "at": when, "claimed": "worked",
+        "keys": claimed, "cmd": red.get("cmd", ""), "exit": red.get("exit"),
+        "at": red.get("at"), "claimed": "worked",
     }
     return state["contested"]
 
 
-def _same_command(left, right):
-    """Whitespace-insensitive equality of two command lines.
-
-    Comparing status_segment() instead looked tidier and was wrong: the status segment
-    of ANY piped command is the pager, so a green `ruff check . 2>&1 | tail -20`
-    cleared a contest raised by a red `pytest ... | tail -20` -- both segments being
-    `tail -20`. That is the any-green-clears bug returning through a different door,
-    for exactly the piping form this module calls dominant.
-    """
-    return " ".join((left or "").split())[:MAX_CMD] == \
-           " ".join((right or "").split())[:MAX_CMD]
-
-
-def _clear_on_green(state, command):
-    """A green re-run of THE SAME command supersedes the evidence.
-
-    Any green at all used to clear it, so `ruff check .` resolved a contest raised over
-    a still-red `pytest` -- while the block message says "re-run that check". The gate
-    may block only once per stop chain, so a contest can never trap a session even when
-    this is strict.
-    """
-    contested = state.get("contested")
-    if contested and _same_command(contested.get("cmd", ""), command):
-        state.pop("contested", None)
+def _record_check(state, command, passed, code, when):
+    """Fold one verification into the ledger and the set of currently-red checks."""
+    key = norm_command(command)
+    entries = [e for e in state.get("verifications", []) if isinstance(e, dict)]
+    entries.append({"at": when, "cmd": key, "ok": bool(passed), "exit": code})
+    state["verifications"] = entries[-MAX_VERIFICATIONS:]
+    reds = dict(state.get("red_checks") or {})
+    if passed:
+        # Re-running a check and getting green supersedes the evidence. It is an
+        # action, not an assertion, which is the whole point of this mechanism.
+        reds.pop(key, None)
+    else:
+        reds[key] = {"cmd": key, "exit": code, "at": when}
+    state["red_checks"] = reds
 
 
 def _clear_on_failure(state, keys):
     """Recording a failure resolves the contest only for the keys it actually covers."""
     state["worked_keys"] = [k for k in state.get("worked_keys", []) if k not in keys]
-    contested = state.get("contested")
-    if not contested:
-        return
-    remaining = [k for k in contested.get("keys", []) if k not in keys]
-    if remaining:
-        contested["keys"] = remaining
-    else:
-        state.pop("contested", None)
+
+
+def _rejected(response):
+    """True when the MCP server refused the call rather than recording it."""
+    value = _decode(response)
+    if isinstance(value, str):
+        return bool(re.match(r"\s*(?:Error:\s*)?Exit code\s+[1-9]", value))
+    seen = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("error_code") or node.get("error"):
+                seen.append(True)
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+    walk(value)
+    return bool(seen)
 
 
 def _now():
@@ -421,14 +449,8 @@ def update(payload):
         state = _load(path)
         if not state.get("surfaced_keys"):
             return out
-        entries = [e for e in state.get("verifications", []) if isinstance(e, dict)]
-        entries.append({"at": _now(), "cmd": command[:MAX_CMD], "ok": bool(passed),
-                        "exit": code})
-        state["verifications"] = entries[-MAX_VERIFICATIONS:]
-        if passed:
-            _clear_on_green(state, command)
-        else:
-            out["contested"] = _contest(state, command, code, _now())
+        _record_check(state, command, passed, code, _now())
+        out["contested"] = _refresh_contest(state)
         _save(path, state)
         return out
 
@@ -442,6 +464,11 @@ def update(payload):
         )
         out["surfaced"] = surfaced
     elif name.endswith("pattern-applied"):
+        # A rejected call stored nothing, so it is not a claim. REQ-026 makes an
+        # omitted `outcome` an error, and treating that error as a `worked` claim
+        # would block the session over a reuse the database never saw.
+        if _rejected(payload.get("tool_response", payload.get("tool_output"))):
+            return out
         tool_input = _decode(payload.get("tool_input") or {})
         applied = tool_input.get("keys", []) if isinstance(tool_input, dict) else []
         claimed = "worked"
@@ -456,11 +483,7 @@ def update(payload):
             state["worked_keys"] = list(
                 dict.fromkeys([*state.get("worked_keys", []), *applied])
             )
-            last = [e for e in state.get("verifications", []) if isinstance(e, dict)]
-            if last and not last[-1].get("ok"):
-                red = last[-1]
-                out["contested"] = _contest(state, red.get("cmd", ""),
-                                            red.get("exit"), red.get("at") or _now())
+        out["contested"] = _refresh_contest(state)
     if state:
         _save(_path(payload), state)
     return out

@@ -864,10 +864,32 @@ own audits always used the line-local gate.
    asserted state content the slow path reproduced exactly, one stayed true through an
    unmutated second copy of the same logic, one compared two different commands so the
    mutation could not reach it, and one covered only one of two call sites. Two lessons,
-   both cheap to state and expensive to find repeatedly: **measure a detector against
-   the real corpus before believing it works**, and **a guard is not a guard until the
-   code it protects has been removed and the guard has been watched to fail.** None of
-   the sixteen was found by reading the code.
+   A fourth round found six more, and they finally named the shape all of these had
+   been: the contest was computed in two places under two slightly different rules, and
+   every asymmetry between them was a bug. Red-after-claim did not contest; the fix for
+   that let a green run of a *different* check clear an unrelated contest; the fix for
+   *that* left red → green-elsewhere → claim raising nothing at all, because only the
+   last ledger entry was read. Three rounds of fixing instances. The contest is now
+   **derived** — `contested == (a reuse stands as 'worked') AND (some check is
+   currently red)`, recomputed from scratch on every event — which closes the class
+   rather than the instances. Also found: `5 passed, 1 error` (a pytest collection
+   failure) classified green; a *rejected* `pattern-applied` call still recorded a
+   claim, so REQ-026's own error could block a session over a reuse the database never
+   saw; and `$( )` in the hook wrapper's `for` word list, which ran `git worktree list`
+   on **every hook call** — invisible at five calls a session, not invisible once this
+   fires on every Bash call. That one predates this work and is fixed for all five
+   hooks.
+
+   Final coverage: 56,731 real command/result pairs, **7,977 invoke a check, 6,321
+   classify (79.2%), 2,320 RED**, every red marker hand-audited.
+
+   Four rounds, **twenty-two defects, none found by reading the code**. Four guards
+   caught inert by mutation, and three of the mutations written to test guards were
+   themselves no-ops. Three lessons worth the cost: **measure a detector against the
+   real corpus before believing it works**; **a guard is not a guard until the code it
+   protects has been removed and the guard watched to fail**; and **when three
+   consecutive fixes each leave the mirror case open, stop fixing instances and derive
+   the value instead.**
 
    **This is a mechanism, not a result.** The count to watch in round 10 is whether
    `applied_failed` is still 0. If it is, then the incentive argument was wrong too and

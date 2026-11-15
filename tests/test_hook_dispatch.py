@@ -205,5 +205,41 @@ class TestTheMinerDoesNotMineItsOwnGate(unittest.TestCase):
                                  [c["kind"] for c in self._mine([rec])[0]])
 
 
+
+class TestGitIsAFallbackNotAPrecondition(unittest.TestCase):
+    """`$( )` inside a `for` word list is expanded before the loop body ever runs.
+
+    Every hook therefore paid for a `git worktree list` on every invocation, even when
+    CLAUDE_PROJECT_DIR already pointed straight at the file. That was invisible at five
+    hook calls a session; it stopped being invisible when the apply tracker started
+    firing on every Bash call. Git is consulted now only after the cheap candidates
+    miss -- which is also the order the comments always claimed.
+    """
+
+    def commands(self):
+        import json as _json
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "templates", ".claude", "settings.json")
+        with open(path, encoding="utf-8") as fh:
+            settings = _json.load(fh)
+        return [h["command"]
+                for groups in settings["hooks"].values()
+                for group in groups
+                for h in group.get("hooks", [])]
+
+    def test_no_hook_expands_git_before_trying_the_cheap_candidates(self):
+        cmds = self.commands()
+        self.assertEqual(len(cmds), 5, "expected five hook commands")
+        for cmd in cmds:
+            with self.subTest(cmd=cmd[:40]):
+                head = cmd.split("; do ", 1)[0]
+                self.assertNotIn("git worktree list", head,
+                                 "git is expanded in the for word list, so it runs "
+                                 "unconditionally on every hook call")
+                self.assertLess(cmd.index("$CLAUDE_PROJECT_DIR"),
+                                cmd.index("git worktree list"))
+                self.assertTrue(cmd.rstrip().endswith("exit 0"),
+                                "a hook must still fail open")
+
 if __name__ == "__main__":
     unittest.main()

@@ -245,9 +245,9 @@ class TestTheGuardsFailWhenTheMechanismIsRemoved(unittest.TestCase):
     def test_removing_the_contest_check_breaks_the_suite(self):
         with open(TRACKER, encoding="utf-8") as fh:
             source = fh.read()
-        target = 'if last and not last[-1].get("ok"):'
+        target = "if not claimed or not reds:"
         self.assertIn(target, source, "mutation target vanished; this test is inert")
-        mutated = source.replace(target, "if False:")
+        mutated = source.replace(target, "if True:")
         self.assertNotEqual(mutated, source, "the mutation did not apply")
 
         tmp = tempfile.mkdtemp()
@@ -591,6 +591,91 @@ class TestWhatTheRunnerSaidVersusWhatTheShellReturned(unittest.TestCase):
                         "the ledger was lost when legacy state was merged")
         self.assertIsNotNone(state.get("contested"),
                              "the contest did not survive the merge")
+
+
+class TestTheContestIsDerivedNotPatched(unittest.TestCase):
+    """Fourth review round. Every bug in this area had the same shape: the contest was
+    computed in two places under two slightly different rules, and each fix closed one
+    instance while leaving its mirror open. Red-after-claim did not contest; then a
+    green run of a DIFFERENT check cleared an unrelated contest; then red-then-green-
+    then-claim produced no contest at all, because only the LAST ledger entry was read.
+
+    It is now derived -- contested == (a reuse stands as 'worked') AND (some check is
+    currently red) -- recomputed from scratch on every event. These guards cover the
+    orderings, which is what a derived value makes it possible to state."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def red(self, cmd="python3 -m pytest", out="2 failed, 3 passed"):
+        self.fx.track(self.fx.repo, dict(bash(cmd, stdout=out), session_id="s1"))
+
+    def green(self, cmd="python3 -m pytest", out="5 passed"):
+        self.fx.track(self.fx.repo, dict(bash(cmd, stdout=out), session_id="s1"))
+
+    def claim(self, outcome="worked"):
+        self.fx.track(self.fx.repo, dict(applied(outcome), session_id="s1"))
+
+    def test_a_green_other_check_between_the_red_and_the_claim_still_contests(self):
+        """pytest red, ruff green, then the claim. Reading only verifications[-1] saw
+        the ruff green and raised nothing, so the gate let the session end."""
+        self.red()
+        self.green("ruff check .", "All checks passed!")
+        self.claim()
+        self.assertIsNotNone(self.fx.state().get("contested"),
+                             "an unrelated green check hid a still-red suite")
+        self.assertEqual(self.fx.stop(self.fx.repo, "s1")["decision"], "block")
+
+    def test_every_ordering_of_red_and_claim_contests(self):
+        for order in ("red-then-claim", "claim-then-red"):
+            with self.subTest(order=order):
+                fx = EvidenceFixture(tempfile.mkdtemp())
+                self.addCleanup(shutil.rmtree, fx.repo, True)
+                fx.track(fx.repo, dict(SEARCH, session_id="o"))
+                red = dict(bash("python3 -m pytest", stdout="1 failed"), session_id="o")
+                clm = dict(applied("worked"), session_id="o")
+                for ev in ((red, clm) if order == "red-then-claim" else (clm, red)):
+                    fx.track(fx.repo, ev)
+                self.assertIsNotNone(
+                    fx.state_files("o")["repo"].get("contested"), order)
+
+    def test_a_pytest_collection_error_is_a_failure(self):
+        """`5 passed, 1 error` is pytest reporting it could not even collect a module.
+        Classified GREEN, a re-run reporting it would clear a real contest."""
+        self.red()
+        self.claim()
+        self.fx.track(self.fx.repo, dict(
+            bash("python3 -m pytest", stdout="5 passed, 1 error in 0.9s"),
+            session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"),
+                             "a collection error was read as a passing run")
+
+    def test_a_rejected_apply_call_is_not_a_claim(self):
+        """REQ-026 makes an omitted `outcome` an error. Treating the rejection as a
+        `worked` claim would block the session over a reuse the database never saw."""
+        self.red()
+        self.fx.track(self.fx.repo, {
+            "tool_name": "mcp__arangodb-memory-mcp__pattern-applied",
+            "session_id": "s1", "tool_input": {"keys": ["k1"]},
+            "tool_response": {"result": {"error": "outcome is required",
+                                         "error_code": "outcome_required"}}})
+        self.assertIsNone(self.fx.state().get("contested"),
+                          "a rejected call was recorded as a success")
+        self.assertEqual(self.fx.state().get("worked_keys", []), [])
+
+    def test_a_long_whitespace_heavy_command_clears_its_own_contest(self):
+        """The stored form was normalised on one side and truncated on the other."""
+        cmd = "cd pkg   &&   python3 -m pytest " + "-k not_slow " * 30
+        self.assertGreater(len(cmd), 300)
+        self.red(cmd, "4 failed")
+        self.claim()
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        self.green(cmd, "7 passed")
+        self.assertIsNone(self.fx.state().get("contested"),
+                          "re-running the same long command did not clear it")
 
 
 if __name__ == "__main__":
