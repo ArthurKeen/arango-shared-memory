@@ -863,7 +863,7 @@ own audits always used the line-local gate.
    Three rounds, sixteen defects, and **four guards caught inert by mutation** — one
    asserted state content the slow path reproduced exactly, one stayed true through an
    unmutated second copy of the same logic, one compared two different commands so the
-   mutation could not reach it, and one covered only one of two call sites. Two lessons,
+   mutation could not reach it, and one covered only one of two call sites.
    A fourth round found six more, and they finally named the shape all of these had
    been: the contest was computed in two places under two slightly different rules, and
    every asymmetry between them was a bug. Red-after-claim did not contest; the fix for
@@ -914,7 +914,28 @@ own audits always used the line-local gate.
    does not justify reopening that bug class. The guard caught the attempt, which is
    the best evidence in this whole exercise that these tests are load-bearing.
 
-   **Five rounds, twenty-eight defects, none found by reading the code.**
+   A sixth round found three — down from six, with the reviewer explicitly checking
+   and clearing the earlier fixes. All three were false GREENS, which is the dangerous
+   direction: a false green does not merely fail to raise a contest, it *resolves* one.
+   The identity was taken from the first runner in a line while the verdict came from
+   the last, so `ruff check . && pytest` (ruff green, pytest red) filed the failure
+   under `ruff check` and a later green ruff cleared it. `pytest --collect-only` and
+   `--version` exit 0 whatever state the tree is in and were recorded as passing runs.
+   And `merge_legacy_state` — which unions lists and never deletes the legacy file —
+   restored a stale `contested` and undid an honest `outcome='failed'`, because
+   `worked_keys` is the first value in this state that is ever *removed* from.
+
+   Fixing the second of those, I wrote `\s-V\b` under `re.IGNORECASE` and so excluded
+   `pytest -v` — the **verbose** flag — from counting as a test run at all: **528 real
+   runs, a third of everything that pattern touched.** The regex read fine. Measuring
+   the exclusions against the corpus is what caught it, one more time.
+
+   **Six rounds, thirty-two defects, none found by reading the code.** Stopping here is
+   a judgement, not a claim of completeness: round 6 found fewer and narrower problems
+   than round 5, and each round's fixes are themselves new code for the next round to
+   review. The mechanism now carries 242 tests and 35 verified mutations. What it does
+   *not* yet carry is a single real failure recorded in production — that is round 10's
+   measurement, and the only one that settles whether any of this worked.
 
    **This is a mechanism, not a result.** The count to watch in round 10 is whether
    `applied_failed` is still 0. If it is, then the incentive argument was wrong too and

@@ -28,7 +28,6 @@ import os
 import re
 import sys
 import tempfile
-from typing import Any
 
 # The sibling lives beside this file; add its directory for importers that load it by path.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -59,6 +58,15 @@ VERIFY_RE = re.compile(
     r"|git\s+bisect\s+run\b"
     r")",
     re.IGNORECASE,
+)
+
+#: Runner invocations that report on themselves rather than on the code. They exit 0
+#: whatever state the tree is in, so recording one GREEN pops a genuine red check and
+#: silently clears a real contest -- a false green is worse than no evidence, because
+#: it does not merely fail to raise a contest, it resolves one.
+NON_ASSERTING = re.compile(
+    r"--(?:collect-only|co|version|help|list|list-tests|fixtures|markers"
+    r"|setup-plan|dry-run)\b"
 )
 
 #: Quoted spans are masked before the command is parsed. Without this, the `|` inside
@@ -144,7 +152,9 @@ def status_is_the_checks(command):
 
 
 def is_verification(command):
-    """Kept as the ledger's gate: does this command run a check at all."""
+    """Does this command run a check whose result says something about the tree."""
+    if NON_ASSERTING.search(_masked(command)):
+        return False
     return mentions_runner(command)
 
 
@@ -352,18 +362,39 @@ def check_identity(command):
     Still per-check, not global: a green `ruff check` must NOT clear a contest raised
     by a red `pytest`. Identity is the middle ground between those two failures.
     """
+    # The identity has to name the check the VERDICT came from. Taking the first
+    # runner in the line while verdict() took the exit status of the LAST one filed
+    # `ruff check . && python3 -m pytest` (ruff green, pytest red, exit 1) under
+    # `ruff check` -- so re-running ruff alone cleared the contest with pytest still
+    # failing. The status segment owns the exit status, so it owns the identity.
+    status = _identity_of(status_segment(command))
+    if status:
+        return status
+    found = []
     for seg in segments(command):
-        match = VERIFY_RE.match(seg)
-        if not match:
-            continue
-        token = match.group(0).lower()
-        token = re.sub(r"^(?:[a-z_][a-z0-9_]*=\S*\s+)*", "", token)     # env assignments
-        token = re.sub(r"^(?:uv|poetry|pdm|hatch|pipenv|rye|pnpm\s+dlx|npx)\s+(?:run\s+)?",
-                       "", token)                                        # runner prefix
-        token = re.sub(r"^\S*/", "", token)                              # path prefix
-        token = re.sub(r"^python[0-9.]*\s+-m\s+", "", token)            # `python -m x`
-        return " ".join(token.split())
+        ident = _identity_of(seg)
+        if ident and ident not in found:
+            found.append(ident)
+    if len(found) == 1:
+        return found[0]
+    # Several checks and none of them owning the exit status: which one the evidence
+    # refers to is genuinely unknown, so fall back to the whole command line. Stricter
+    # than identity -- only re-running the same compound command clears it -- but a
+    # strict key on a rare shape beats attributing a failure to the wrong check.
     return norm_command(command)
+
+
+def _identity_of(segment):
+    match = VERIFY_RE.match(segment or "")
+    if not match:
+        return ""
+    token = match.group(0).lower()
+    token = re.sub(r"^(?:[a-z_][a-z0-9_]*=\S*\s+)*", "", token)     # env assignments
+    token = re.sub(r"^(?:uv|poetry|pdm|hatch|pipenv|rye|pnpm\s+dlx|npx)\s+(?:run\s+)?",
+                   "", token)                                        # runner prefix
+    token = re.sub(r"^\S*/", "", token)                              # path prefix
+    token = re.sub(r"^python[0-9.]*\s+-m\s+", "", token)            # `python -m x`
+    return " ".join(token.split())
 
 
 def norm_command(command):

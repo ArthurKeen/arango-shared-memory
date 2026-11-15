@@ -787,5 +787,80 @@ class TestTheGateStaysSatisfiable(unittest.TestCase):
         self.assertIn("\u2026", reason, "the command was truncated with no ellipsis")
 
 
+class TestTheEvidenceIsAttributedToTheRightCheck(unittest.TestCase):
+    """Sixth review round. Three findings, all of them false GREENS -- which is the
+    dangerous direction, because a false green does not merely fail to raise a
+    contest, it RESOLVES one."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def test_the_red_is_filed_against_the_check_that_failed(self):
+        """`ruff check . && python3 -m pytest -q`: ruff passes, pytest fails, the shell
+        returns 1. Taking the identity from the FIRST runner filed that red under
+        `ruff check`, so re-running ruff alone cleared the contest with pytest still
+        red. The status segment owns the exit status, so it owns the identity."""
+        self.fx.track(self.fx.repo, dict(
+            bash("ruff check . && python3 -m pytest -q", ok=False), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        self.assertEqual(list(self.fx.state()["red_checks"]), ["pytest"])
+        self.fx.track(self.fx.repo, dict(
+            bash("ruff check .", stdout="All checks passed!"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"),
+                             "a green ruff cleared a contest that belonged to pytest")
+
+    def test_an_invocation_that_asserts_nothing_is_not_evidence(self):
+        """`pytest --collect-only`, `--version`, `cargo test --list` exit 0 whatever
+        state the tree is in. Recorded GREEN under identity `pytest`, each one pops a
+        genuine red check and clears a real contest."""
+        self.fx.track(self.fx.repo,
+                      dict(bash("python3 -m pytest", stdout="2 failed"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        # -v is pytest's VERBOSE flag, not a version query. A case-insensitive
+        # `-V` in this pattern excluded 528 genuine test runs in the measured
+        # corpus -- a third of everything it touched -- and the regex read fine.
+        for verbose in ("python3 -m pytest -v", "pytest -vv tests/"):
+            with self.subTest(cmd=verbose):
+                self.assertTrue(_TRACKER.is_verification(verbose),
+                                f"{verbose!r} is a real test run")
+        for cmd in ("python3 -m pytest --collect-only", "pytest --version",
+                    "cargo test --list", "pytest --co -q"):
+            with self.subTest(cmd=cmd):
+                self.fx.track(self.fx.repo, dict(bash(cmd), session_id="s1"))
+                self.assertIsNotNone(
+                    self.fx.state().get("contested"),
+                    f"{cmd!r} asserts nothing about the tree but cleared a contest")
+
+    def test_a_legacy_file_cannot_resurrect_a_resolved_contest(self):
+        """merge_legacy_state unions lists and never deletes the legacy file, so every
+        later read re-offered whatever it held. `worked_keys` is the first value here
+        that is ever REMOVED from -- recording outcome='failed' takes a key out of it --
+        so an honest failure was undone and the stale `contested` restored verbatim.
+        The gate then blocks on a resolved contest with no action that clears it: the
+        unsatisfiable gate this project has already shipped once."""
+        self.fx.track(self.fx.repo,
+                      dict(bash("python3 -m pytest", stdout="1 failed"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        stale = dict(self.fx.state())
+        self.assertIsNotNone(stale.get("contested"))
+        # The agent does the honest thing and records the failure.
+        self.fx.track(self.fx.repo, dict(applied("failed"), session_id="s1"))
+        self.assertIsNone(self.fx.state().get("contested"))
+        # A legacy copy from before that still carries the claim and the contest.
+        self.fx.write_state(self.fx.wt, "s1", stale)
+        self.fx.track(self.fx.wt, dict(SEARCH, session_id="s1"))
+        self.assertIsNone(self.fx.state().get("contested"),
+                          "a legacy file resurrected a contest the agent had resolved")
+        self.assertEqual(self.fx.state().get("worked_keys", []), [],
+                         "a legacy file undid an honest outcome='failed'")
+        self.assertIsNone(self.fx.stop(self.fx.repo, "s1"),
+                          "the gate blocked on a contest with no way to clear it")
+
+
 if __name__ == "__main__":
     unittest.main()
