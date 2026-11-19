@@ -606,12 +606,16 @@ class TestClaudeApplyTracker(unittest.TestCase):
         self.dir.cleanup()
 
     def test_tracks_search_and_apply_without_auto_applying(self):
-        surfaced = self.tracker.update({
+        # update() returns {"surfaced": [...], "contested": ...} since 2026-11-14: the
+        # hook now also checks an apply claim against the project's own checks, and a
+        # bare list had nowhere to carry that. See tests/test_outcome_evidence.py.
+        result = self.tracker.update({
             "session_id": "s1",
             "tool_name": "mcp__arangodb-memory-mcp__pattern-search",
             "tool_response": {"result": {"patterns": [{"_key": "p1"}]}},
         })
-        self.assertEqual(surfaced, ["p1"])
+        self.assertEqual(result["surfaced"], ["p1"])
+        self.assertIsNone(result["contested"])
         path = os.path.join(".claude", ".shared-memory-sessions", "s1.json")
         with open(path) as fh:
             state = json.load(fh)

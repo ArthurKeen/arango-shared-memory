@@ -85,18 +85,27 @@ try:
     # learned success-rate ranking for everyone else.
     resolved = set(state.get("applied_keys", [])) | set(state.get("dismissed_keys", []))
     pending = [k for k in state.get("surfaced_keys", []) if k not in resolved]
-    print(len(pending), sid, ",".join(pending) or "-")
+    # A CONTESTED claim is a fourth state: reuse attributed as a success while the
+    # checks of the project were red. NO APOSTROPHES in this block -- it is the body of
+    # a single-quoted `python3 -c` shell string, and one closes that string early
+    # (caught by bash -n while writing this). Flag only, and whitespace-free, so the
+    # cut -d<space> parsing below stays valid; the command text carries spaces and is
+    # read straight from the state file by the message builder instead.
+    print(len(pending), sid, ",".join(pending) or "-",
+          1 if state.get("contested") else 0)
 except Exception:
-    print("0 - -")' "$ROOT" 2>/dev/null || echo "0 - -")
+    print("0 - - 0")' "$ROOT" 2>/dev/null || echo "0 - - 0")
 APPLY_PENDING=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f1)
 APPLY_SID=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f2)
 APPLY_KEYS=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f3)
+APPLY_CONTESTED=$(printf '%s' "$APPLY_INFO" | cut -d' ' -f4)
 case "$APPLY_PENDING" in ''|*[!0-9]*) APPLY_PENDING=0;; esac
-[ "$COUNT" -eq 0 ] && [ "$APPLY_PENDING" -eq 0 ] && exit 0
+case "$APPLY_CONTESTED" in 1) ;; *) APPLY_CONTESTED=0;; esac
+[ "$COUNT" -eq 0 ] && [ "$APPLY_PENDING" -eq 0 ] && [ "$APPLY_CONTESTED" -eq 0 ] && exit 0
 
-python3 - "$COUNT" "$PRD_COUNT" "$APPLY_PENDING" "$APPLY_SID" "$APPLY_KEYS" "$ROOT" 2>/dev/null <<'PY' || exit 0
+python3 - "$COUNT" "$PRD_COUNT" "$APPLY_PENDING" "$APPLY_SID" "$APPLY_KEYS" "$ROOT" "$APPLY_CONTESTED" 2>/dev/null <<'PY' || exit 0
 import json, os, shlex, sys
-count, prd, pending, sid, keys, root = (sys.argv[1:] + [""] * 6)[:6]
+count, prd, pending, sid, keys, root, contested_flag = (sys.argv[1:] + [""] * 7)[:7]
 # Absolute, so the command also runs from a git worktree, which has no .claude/hooks.
 dismiss = (shlex.quote(os.path.join(root, ".claude/hooks/dismiss_surfaced.py")) if root
            else ".claude/hooks/dismiss_surfaced.py")
@@ -121,6 +130,36 @@ if pending != "0":
                  f"python3 {dismiss} {sid} {spaced} "
                  "Do not use (3) for something you actually tried — that discards the "
                  "evidence. Never mark every result as applied.")
+if contested_flag == "1":
+    # The detail comes from the state file rather than argv: a command line contains
+    # spaces and the field parsing above is cut -d' '. Failing to read it degrades to
+    # the generic wording, never to a crash -- this gate must not trap a session.
+    cmd, bad_keys, code = "", "", "?"
+    try:
+        sys.path.insert(0, os.path.join(root or ".", ".claude", "hooks"))
+        from hook_paths import state_dir
+        with open(os.path.join(state_dir(), sid + ".json")) as fh:
+            c = json.load(fh).get("contested") or {}
+        cmd = " ".join(str(c.get("cmd") or "").split())
+        # Same shortening as the tracker, and visibly marked. A silently truncated
+        # command invites re-running what is DISPLAYED, which is a different command.
+        cmd = cmd if len(cmd) <= 120 else cmd[:119] + "\u2026"
+        code = c.get("exit")
+        bad_keys = " ".join(c.get("keys") or [])
+    except Exception:
+        pass
+    parts.append("[SHARED-MEMORY APPLY GATE] A reuse was recorded as outcome='worked' "
+                 "while this project's own checks were RED"
+                 + ((f": `{cmd}` exited {code}." if code is not None
+                     else f": `{cmd}` reported failures.") if cmd else ".")
+                 + " Every outcome this system has ever stored is 'worked' (288 of 288), "
+                 "so a success that is merely asserted is worth nothing. Resolve it with "
+                 "an ACTION, not a restatement: (a) re-run that check -- if it passes, "
+                 "the evidence is superseded, this clears itself and the claim stands; "
+                 "(b) if it still fails, call pattern-applied with outcome='failed' for "
+                 + (bad_keys or "the key(s) you claimed") + ". Do not simply repeat the "
+                 "'worked' claim: that is the assertion this gate exists to stop "
+                 "accepting.")
 print(json.dumps({
     "decision": "block",
     "reason": " ".join(parts),

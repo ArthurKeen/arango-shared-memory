@@ -95,6 +95,60 @@ def legacy_state_dirs(kind=".claude"):
         yield os.path.join(base, kind, ".shared-memory-sessions")
 
 
+#: State that only ever grows, so a union across two files is exactly right.
+APPEND_ONLY = ("surfaced_keys", "applied_keys", "dismissed_keys", "verifications")
+
+#: State that is DERIVED from the rest and must never come back from a legacy file.
+#: The legacy file is deliberately never deleted, so every read of it re-offers
+#: whatever it held. `contested` is computed from the other two keys and a stale copy
+#: restored verbatim gives the Stop gate a contest no action can clear -- the
+#: unsatisfiable gate this project has already shipped once.
+DERIVED = ("contested",)
+
+
+def _merge_value(key, current, legacy):
+    """How one key of the session state combines across two files.
+
+    Union is right for the append-only lists and wrong for everything else.
+    `worked_keys` is the first value here that is ever REMOVED from -- recording
+    outcome='failed' takes a key out of it -- so unioning it silently undid an honest
+    failure on the next merge, and `red_checks` would likewise resurrect checks that
+    had since gone green. Whatever the current file says about those wins outright;
+    the legacy file only fills in a key the current one has never had.
+    """
+    if key in DERIVED:
+        return current
+    if key in APPEND_ONLY and isinstance(current, list) and isinstance(legacy, list):
+        return _union(current, legacy)
+    return current if current is not _MISSING else legacy
+
+
+_MISSING = object()
+
+
+def _union(left, right):
+    """Union two list values of the session state, whatever they hold.
+
+    The key lists (surfaced/applied/dismissed) are lists of strings and a sorted set
+    union is exactly right for them. The verification ledger is a list of DICTS, and
+    `set()` on it raises TypeError: unhashable type -- which the caller's
+    `except (OSError, ValueError)` does not catch. That would abort the merge inside
+    the tracker on every event, in precisely the worktree case this function exists
+    for, and silently stop the hook recording anything at all.
+
+    Unhashable entries are therefore concatenated in order and de-duplicated by value,
+    keeping the ledger chronological. The last entry is what the gate reads.
+    """
+    try:
+        return sorted(set(left) | set(right))
+    except TypeError:
+        out = []
+        for item in list(left) + list(right):
+            if item not in out:
+                out.append(item)
+        return out
+
+
 def merge_legacy_state(session_id, kind=".claude"):
     """Fold any legacy state for ``session_id`` into the resolved location.
 
@@ -121,21 +175,20 @@ def merge_legacy_state(session_id, kind=".claude"):
             continue
         found = True
         for key, value in data.items():
-            if isinstance(value, list):
-                merged[key] = sorted(set(merged.get(key, [])) | set(value))
-            else:
-                merged.setdefault(key, value)
+            merged[key] = _merge_value(key, merged.get(key, _MISSING), value)
     if not found:
         return False
     try:
         if os.path.isfile(target):
             with open(target, encoding="utf-8") as fh:
                 current = json.load(fh)
+            # The CURRENT file is authoritative: it is the one being written to.
             for key, value in current.items():
-                if isinstance(value, list):
-                    merged[key] = sorted(set(merged.get(key, [])) | set(value))
-                else:
-                    merged[key] = value
+                merged[key] = _merge_value(key, value, merged.get(key, _MISSING))
+            for key in DERIVED:
+                # Present only if the current file still holds it.
+                if key not in current:
+                    merged.pop(key, None)
         ensure_private_dir(os.path.dirname(target))
         with open(target, "w", encoding="utf-8") as fh:
             json.dump(merged, fh, indent=2)

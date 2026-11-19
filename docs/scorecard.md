@@ -803,14 +803,151 @@ own audits always used the line-local gate.
 
 **Ranked for round 9 (2026-11-13):**
 
-1. **Make recording a failure something that happens, not something that is offered.**
-   136 outcomes since round 8, all `worked`, with the capability live and named in every
-   gate message. Documentation has now been tried and has failed; the next attempt has
-   to change the incentive — deriving the outcome from evidence the agent cannot assert
-   (tests still red, the change reverted, the alert reopened) rather than asking for it.
-2. **Raise the CDF enablement PR.** Named as the highest-leverage adoption action in
-   rounds 8 and 9 and still not raised. ~90% search concentration will not move while
-   the other readers work in the one project without the hooks.
+1. ~~**Make recording a failure something that happens, not something that is offered.**~~
+   **SHIPPED 2026-11-14 — not yet proven.** Two changes. (a) `outcome` lost its
+   `"worked"` default: omitting it is now an `outcome_required` error, so a positive
+   signal is no longer what an agent gets for not considering the question. (b) The
+   apply tracker keeps a verification ledger — the exit status of the session's own
+   test/lint/typecheck runs — and a `worked` claim made while the last one was RED is
+   CONTESTED: the Stop gate blocks, names the failing command, and offers two
+   resolutions that are both actions (re-run the check and go green, which supersedes
+   the evidence and clears the contest; or record `outcome='failed'`). Restating
+   "worked" resolves nothing. Detection is shape-based — Claude Code returns a dict for
+   a passing command and the string `"Error: Exit code N"` for a failing one, confirmed
+   against stored transcripts — and anything it cannot classify confidently is not
+   treated as evidence, because contesting an honest claim is worse than missing a
+   dishonest one.
+
+   Review of the change found **six defects, four reproduced end to end**, and five of
+   the six pointed the same way: the mechanism would have *reported* working while
+   measuring nothing. `pytest -q 2>&1 | tail -20` exits with tail's status, so every
+   piped test run — the dominant form in real transcripts — logged green, and a false
+   green does not merely miss a contest, it clears one. A `|` inside
+   `grep -nE "ruff|mypy"` parsed as a pipeline, so a grep finding nothing was stored as
+   a red type check, which would have contested *honest* claims. And the contest was
+   computed only when `pattern-applied` fired, which makes it inert in the ordering
+   this project's own `CLAUDE.md` prescribes: record the reuse immediately, *then* keep
+   working. That last one is the pattern worth carrying forward — a guard can pass
+   every test written for it and still never fire in the workflow it was built for.
+
+   A second review round then found the first fix had created a worse version of the
+   same fault. Requiring the check to own the shell's exit status — the correct way to
+   avoid reading `pytest | tail` as a pass — recognised **10 of the 13,299
+   runner-invoking commands in 69,167 real Bash calls, 0.1%**, and **0 of 824 in this
+   repository**. It would have shipped, passed every test, and never fired once.
+   Real agent commands are whole shell programs (`cd X && … <<PY … PY`, loops,
+   `S=$(mktemp)` preambles, output piped to `tail`), so asking *where in the script*
+   the runner sits is the wrong question. The verdict now comes from what the runner
+   **says** — its own summary line, which survives pipes, loops and heredocs — with the
+   exit status as a fallback where it is the check's own. Replayed over the same
+   corpus: **75.5% classify, 2,297 of them RED.** Two further guards were caught inert
+   by mutation (one asserted state content that the slow path reproduced exactly; one
+   stayed true through an unmutated second copy of the same masking logic) and both
+   were rewritten against an observable.
+
+   A third round found five more, three of which could each silently defeat the
+   central guarantee. Two were earlier fixes returning through a different door: the
+   contest was compared by *status segment*, and the status segment of any piped
+   command is the pager, so a green `ruff check . | tail` cleared a contest raised by a
+   red `pytest | tail` — the any-green-clears bug again, for the exact piping form the
+   module calls dominant. And a green summary printed by an *earlier stage* of a failing
+   script (`make check` emitting unittest's `OK` before shellcheck fails) was recorded
+   green, so re-running that still-failing command cleared a real contest. The third
+   was a crash: the ledger is a list of dicts and `merge_legacy_state` unioned every
+   list with `set()`, raising `TypeError: unhashable type` — uncaught, in exactly the
+   worktree case that function exists for.
+
+   Final coverage, replayed over 56,691 real command/result pairs: **7,966 invoke a
+   check, 6,232 classify (78.2%), 2,186 of them RED.**
+
+   Three rounds, sixteen defects, and **four guards caught inert by mutation** — one
+   asserted state content the slow path reproduced exactly, one stayed true through an
+   unmutated second copy of the same logic, one compared two different commands so the
+   mutation could not reach it, and one covered only one of two call sites.
+   A fourth round found six more, and they finally named the shape all of these had
+   been: the contest was computed in two places under two slightly different rules, and
+   every asymmetry between them was a bug. Red-after-claim did not contest; the fix for
+   that let a green run of a *different* check clear an unrelated contest; the fix for
+   *that* left red → green-elsewhere → claim raising nothing at all, because only the
+   last ledger entry was read. Three rounds of fixing instances. The contest is now
+   **derived** — `contested == (a reuse stands as 'worked') AND (some check is
+   currently red)`, recomputed from scratch on every event — which closes the class
+   rather than the instances. Also found: `5 passed, 1 error` (a pytest collection
+   failure) classified green; a *rejected* `pattern-applied` call still recorded a
+   claim, so REQ-026's own error could block a session over a reuse the database never
+   saw; and `$( )` in the hook wrapper's `for` word list, which ran `git worktree list`
+   on **every hook call** — invisible at five calls a session, not invisible once this
+   fires on every Bash call. That one predates this work and is fixed for all five
+   hooks.
+
+   Final coverage: 56,731 real command/result pairs, **7,977 invoke a check, 6,321
+   classify (79.2%), 2,320 RED**, every red marker hand-audited.
+
+   Four rounds, **twenty-two defects, none found by reading the code**. Four guards
+   caught inert by mutation, and three of the mutations written to test guards were
+   themselves no-ops. Three lessons worth the cost: **measure a detector against the
+   real corpus before believing it works**; **a guard is not a guard until the code it
+   protects has been removed and the guard watched to fail**; and **when three
+   consecutive fixes each leave the mirror case open, stop fixing instances and derive
+   the value instead.**
+
+   A fifth round found six more, and its theme is a failure mode this project has
+   already shipped once: **a gate that cannot be satisfied.** Counting only
+   `applied_keys` once made the apply gate demand that every surfaced key be applied,
+   which its own message forbade. Keying contests on the exact command line was the
+   same mistake in a new place — re-run the suite with one more flag, a narrower path,
+   or piped to `tail` this time, and the green was recorded while the contest stood
+   forever, leaving a fabricated `outcome='failed'` as the only exit. Contests are now
+   keyed on the check's *identity* (`pytest`, `ruff check`), which is the middle ground
+   between that and the any-green-clears bug of round 3. Also: checks run **before** the
+   first `pattern-search` were dropped, so the ordinary order — reproduce the failure,
+   search, apply, claim — contested nothing; `pytest -q &` was logged green with the
+   suite still running; and `_rejected()` missed the very error shape this change
+   introduces, so REQ-026's `outcome_required` would have been recorded as a success.
+
+   One finding was **declined**: `state_dir()` forks `git worktree list` when
+   `CLAUDE_PROJECT_DIR` is absent, and checking the cwd first would avoid it. It would
+   also be a second place that builds the state path — precisely what
+   `test_no_hook_builds_the_path_itself` forbids, and precisely the cause of the
+   worktree split that put surfaced keys in one file and applied keys in another.
+   Claude Code sets that variable for every hook, so the fork is rare; a perf nicety
+   does not justify reopening that bug class. The guard caught the attempt, which is
+   the best evidence in this whole exercise that these tests are load-bearing.
+
+   A sixth round found three — down from six, with the reviewer explicitly checking
+   and clearing the earlier fixes. All three were false GREENS, which is the dangerous
+   direction: a false green does not merely fail to raise a contest, it *resolves* one.
+   The identity was taken from the first runner in a line while the verdict came from
+   the last, so `ruff check . && pytest` (ruff green, pytest red) filed the failure
+   under `ruff check` and a later green ruff cleared it. `pytest --collect-only` and
+   `--version` exit 0 whatever state the tree is in and were recorded as passing runs.
+   And `merge_legacy_state` — which unions lists and never deletes the legacy file —
+   restored a stale `contested` and undid an honest `outcome='failed'`, because
+   `worked_keys` is the first value in this state that is ever *removed* from.
+
+   Fixing the second of those, I wrote `\s-V\b` under `re.IGNORECASE` and so excluded
+   `pytest -v` — the **verbose** flag — from counting as a test run at all: **528 real
+   runs, a third of everything that pattern touched.** The regex read fine. Measuring
+   the exclusions against the corpus is what caught it, one more time.
+
+   **Six rounds, thirty-two defects, none found by reading the code.** Stopping here is
+   a judgement, not a claim of completeness: round 6 found fewer and narrower problems
+   than round 5, and each round's fixes are themselves new code for the next round to
+   review. The mechanism now carries 242 tests and 35 verified mutations. What it does
+   *not* yet carry is a single real failure recorded in production — that is round 10's
+   measurement, and the only one that settles whether any of this worked.
+
+   **This is a mechanism, not a result.** The count to watch in round 10 is whether
+   `applied_failed` is still 0. If it is, then the incentive argument was wrong too and
+   the remaining explanation is that reuse here genuinely never fails — which, at
+   299 applies, would itself need explaining. Cursor has no equivalent yet: its
+   `postToolUse` payload shape for shell commands is unconfirmed, and this was not
+   worth guessing at after the Claude shape was verified rather than assumed.
+2. ~~**Raise the CDF enablement PR.**~~ **RAISED 2026-11-13** as
+   contextual-data-fabric#365, three months after the C2 note said it should be. Checks
+   green, mergeable, no review yet. It is not this project's to merge, so the action is
+   complete and the outcome is not. ~90% search concentration will not move until it
+   lands.
 3. ~~**Repair `open_gaps` for the 9 drifted projects.**~~ **DONE 2026-11-13.** All
    nine now read 0. `project-sentinel` still differs (10 vs 1) and is deliberately not
    repaired — it is not dormant, so `/prd-sync` owns that counter.
