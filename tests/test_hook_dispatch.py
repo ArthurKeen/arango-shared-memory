@@ -51,7 +51,12 @@ class TestHookCommandsNeverBlockASession(unittest.TestCase):
                                 "guard would pass vacuously")
 
     def _run(self, command, cwd, project_dir=""):
-        env = dict(os.environ, CLAUDE_PROJECT_DIR=project_dir)
+        # ARANGO_HOSTS satisfies the issue-#19 guard that now prefixes every
+        # command. Without it these tests would pass vacuously on any machine
+        # with no memory server configured -- CI, for one -- because the guard
+        # exits 0 before dispatch is ever reached.
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=project_dir,
+                   ARANGO_HOSTS="http://127.0.0.1:9")
         return subprocess.run(["sh", "-c", command], cwd=cwd, env=env,
                               stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=30)

@@ -100,6 +100,13 @@ python3 ~/code/arango-shared-memory/scripts/rollout_cursor_hooks.py --apply
 **Do NOT run `install.py` / `setup_*` / `phase*` against the shared cluster** — those stand up a *new*
 backend, not join an existing one. Full walkthrough: **[ONBOARDING.md](ONBOARDING.md)**.
 
+**If you have not done step 2, the hooks do nothing.** They run for whoever opens a bootstrapped
+project, so they first check whether anyone here opted in: no `ARANGO_HOSTS` and no
+`arangodb-memory-mcp` entry in `~/.claude.json` or `~/.cursor/mcp.json` means every hook exits
+silently — no digest, no queued drift marker, no Stop gate. Configured and want them off anyway?
+Export `SHARED_MEMORY_HOOKS=0`. (To disable only the drift gate in one project, use its
+`.no-drift-gate` file instead.)
+
 ## Admin — stand up a NEW backend
 Only when creating a fresh shared memory (a new cluster, or a private local one for solo/offline use).
 

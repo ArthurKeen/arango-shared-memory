@@ -677,6 +677,51 @@ not only when a session happens to trip over it.
 > correct. It is recorded because a scorecard that reports unaudited numbers is the
 > thing this round is complaining about.
 
+#### Addendum 2026-11-19: the guard that had to land before the rollout
+
+Round 9's action 1 merged in both repositories (#16 here, `arango-solutions-mcp` #50).
+Merging deployed nothing: the 33 bootstrapped checkouts hold plain file copies, and
+`rollout_cursor_hooks.py` is manual with a dry-run default. Nobody's sessions changed on
+the day it landed — which is the only reason the next finding was cheap.
+
+The CDF enablement review had produced exactly one must-fix, and it was fixed **in that
+repository only**. The hooks run for whoever opens a bootstrapped project, configured or
+not. For a teammate without the memory server, SessionStart announced every single
+session that recall was not active, and one Python edit — or merely uncommitted work the
+Stop-time reconciler noticed — produced a `{"decision":"block"}` at every Stop, clearable
+only by a `/prd-sync` that was never set up for them. Nothing was broken. The hooks
+worked exactly as designed, for someone who never opted in. Of 33 checkouts carrying
+`pattern_apply_tracker.py`, **one** had the guard.
+
+Every other rail in this system covers a failure. This is the only one that fires when
+everything works.
+
+#16 made it worse in two specific ways before anyone had noticed the first: it widened
+the `PostToolUse` matcher from the pattern tools to **every `Bash` call**, and it added a
+new reason to block at Stop. Rolling out action 1 without the guard would have put both
+on thirty-two repositories — the CDF failure repeated, at thirty-two times the scale.
+
+Filed as #19 and fixed here (REQ-077): two doors — `SHARED_MEMORY_HOOKS=0` for someone
+configured who wants quiet, silence for someone who never configured the server — in
+front of all five Claude hook commands and inside all four Cursor hooks. Cursor was not
+named in the issue; it is in the same rollout and has the same defect, so narrowing to
+the letter of the issue would have shipped half a fix. Configuration is decided by
+**parsing** the MCP config rather than grepping for the server's name, so the name in a
+permission allowlist, or in stored conversation text, cannot count as consent.
+
+19 tests (suite: 242 → 261), every silence assertion paired with a positive control on
+the same project and the same payload — without the pair, a hook that broke for an
+unrelated reason would make the whole file pass. Verified by mutation: stripping the
+shell guard fails 12; dropping any one Cursor hook's early return fails 2, one
+behavioural and one structural.
+
+One cost worth recording. The existing dispatch tests would have begun passing
+**vacuously** the moment the guard landed, because a CI runner has no `~/.claude.json`
+and the guard exits before dispatch is ever reached — the suite would have stayed green
+while testing nothing. They now set `ARANGO_HOSTS` explicitly. A guard that can silence
+the system can also silence the tests that watch it, and that is worth checking every
+time one is added.
+
 ## 1. PRD requirement coverage
 
 > **Last audited round 5 (2026-08-19), not re-verified since.** A coverage claim with no
