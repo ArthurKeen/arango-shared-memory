@@ -722,6 +722,32 @@ while testing nothing. They now set `ARANGO_HOSTS` explicitly. A guard that can 
 the system can also silence the tests that watch it, and that is worth checking every
 time one is added.
 
+**Rolled out the same day.** #20 merged as `ec0e070`; `rollout_cursor_hooks.py --apply`
+updated **30 of 30** discovered projects (`contextual-data-fabric` stays excluded — it
+tracks `.claude/` in a public, PR-governed repository, and enforcement there belongs in
+a reviewed PR). Each project received the guarded `.claude/settings.json`, the four
+guarded Cursor hooks, and `drift_stop_gate.sh` / `pattern_apply_tracker.py` /
+`hook_paths.py` from #16 — so round 9's action 1 is, for the first time, actually
+running somewhere other than this repository. Re-running the tool reports 30 unchanged.
+
+Verified in a real rolled-out project rather than only in the fixtures: with a queued
+drift marker and no bypass file, the Stop gate is silent and exits 0 unconfigured,
+emits `{"decision": "block"}` configured, and is silent again under
+`SHARED_MEMORY_HOOKS=0`.
+
+One thing the rollout did that the dry run's own output did not make obvious: **nine of
+the thirty track `.cursor/hooks/*.py` in git**, so they now carry uncommitted changes to
+version-controlled files — FinReflectKG, agentic-graph-analytics, arango-ontoextract,
+arango-schema-analyzer, arango-solutions-mcp-server, argos, auto-tool-research,
+gdelt-market-impact, ic-knowledge-graph. `.claude/settings.json` is tracked nowhere, and
+the `.pre-update.*` backups are gitignored, so `git status` in those repos shows exactly
+the four hook files and nothing else. This is the contextual-data-fabric situation at
+lower stakes — they are all our own repositories, and none is mid-review — but it is the
+same shape, and the pre-flight check that was supposed to catch it looked at `.claude/`
+only. The exclusion list and the `.no-shared-memory-rollout` marker both key on the
+decision *we* remembered to make; neither notices a repository that simply happens to
+version its hooks.
+
 ## 1. PRD requirement coverage
 
 > **Last audited round 5 (2026-08-19), not re-verified since.** A coverage claim with no
