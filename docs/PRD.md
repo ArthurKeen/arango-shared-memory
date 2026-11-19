@@ -161,6 +161,20 @@ Status legend used by audits: IMPLEMENTED / PARTIAL / MISSING / TEST-ONLY / SKIP
   unconfirmed, and the Claude shape was established by replaying stored transcripts
   rather than assumed. Guessing the other one immediately after doing that work would
   be the same mistake with the evidence removed.
+- **REQ-077** Every hook, on both runtimes, MUST do nothing at all for a person who
+  has not opted into shared memory. Two doors: `SHARED_MEMORY_HOOKS=0` turns the hooks
+  off for someone who IS configured, and the absence of both `ARANGO_HOSTS` and an
+  `arangodb-memory-mcp` entry in a user-level MCP config means silence for someone who
+  never configured the server. "Nothing" is exit 0 with no output on any stream — no
+  digest, no queued marker, no Stop decision. Configuration MUST be read by parsing the
+  config, never by matching the server's name anywhere in a file: a name in a
+  permission allowlist, or in stored conversation text, is not consent.
+
+  This is the only rail here that fires when nothing is broken. Every other one covers
+  a failure; this one covers the hooks working exactly as designed, for someone who
+  never asked for them. An unconfigured teammate was told every session that recall was
+  not active, and was then blocked at every Stop by a queue only `/prd-sync` could
+  clear — and `/prd-sync` was never set up for them.
 
 ## 9. Lifecycle and scheduled maintenance
 
