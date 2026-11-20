@@ -370,18 +370,45 @@ def check_identity(command):
     status = _identity_of(status_segment(command))
     if status:
         return status
+    found = _identities_in(command)
+    if len(found) == 1:
+        return found[0]
+    # Several checks and none of them owning the exit status: which one the evidence
+    # refers to is genuinely unknown. The command line stands in as the LEDGER's label
+    # only; a red is filed under every check in it (see check_identities), never
+    # under this line.
+    return norm_command(command)
+
+
+def _identities_in(command):
     found = []
     for seg in segments(command):
         ident = _identity_of(seg)
         if ident and ident not in found:
             found.append(ident)
-    if len(found) == 1:
-        return found[0]
-    # Several checks and none of them owning the exit status: which one the evidence
-    # refers to is genuinely unknown, so fall back to the whole command line. Stricter
-    # than identity -- only re-running the same compound command clears it -- but a
-    # strict key on a rare shape beats attributing a failure to the wrong check.
-    return norm_command(command)
+    return found
+
+
+def check_identities(command):
+    """Every check a red from this command may belong to.
+
+    One when attribution is clear: the status segment's check, or the only check in
+    the line. Otherwise EVERY check the line runs, and each must go green on its own.
+
+    Keying that case on the whole command line instead was an unsatisfiable gate:
+    `python3 - <<EOF ...edits... EOF; ruff check . && pytest | tail -2` with one test
+    failing could be cleared only by re-running the same line, which repeats the
+    edits -- and an edit script that asserts its old text fails by design the second
+    time. The agent fixed the test, ran pytest green, and the gate still blocked, with
+    a fabricated outcome='failed' the only way out. Filing under each check keeps the
+    strictness that key was for (a green ruff alone does not clear pytest's failure)
+    and stays satisfiable: re-run each check, in any form.
+    """
+    status = _identity_of(status_segment(command))
+    if status:
+        return [status]
+    found = _identities_in(command)
+    return found or [norm_command(command)]
 
 
 def _identity_of(segment):
@@ -448,14 +475,40 @@ def _record_check(state, command, passed, code, when):
     entries.append({"at": when, "cmd": shown, "check": key, "ok": bool(passed),
                     "exit": code})
     state["verifications"] = entries[-MAX_VERIFICATIONS:]
-    reds = dict(state.get("red_checks") or {})
+    reds = _refile_whole_line_reds(dict(state.get("red_checks") or {}))
+    idents = check_identities(command)
     if passed:
         # Re-running a check and getting green supersedes the evidence. It is an
         # action, not an assertion, which is the whole point of this mechanism.
-        reds.pop(key, None)
+        # Only when the green is attributable: `ruff check . ; pytest | tail` saying
+        # "9 passed" proves pytest, not ruff, so an ambiguous green clears nothing
+        # (bar a red stored under this very line by an older version).
+        if len(idents) == 1:
+            reds.pop(idents[0], None)
+        reds.pop(shown, None)
     else:
-        reds[key] = {"cmd": shown, "check": key, "exit": code, "at": when}
+        for ident in idents:
+            reds[ident] = {"cmd": shown, "check": ident, "exit": code, "at": when}
     state["red_checks"] = reds
+
+
+def _refile_whole_line_reds(reds):
+    """Re-file reds an older version keyed on a whole command line under its checks.
+
+    Without this, a session already holding one stays blocked after the upgrade:
+    the fix stops new ones being written but the old key still can only be cleared
+    by re-running the line that wrote it.
+    """
+    out = {}
+    for key, entry in reds.items():
+        cmd = (entry or {}).get("cmd") or ""
+        idents = check_identities(cmd) if key == cmd else [key]
+        if len(idents) > 1 or (idents and idents[0] != key):
+            for ident in idents:
+                out.setdefault(ident, dict(entry, check=ident))
+        else:
+            out[key] = entry
+    return out
 
 
 def _clear_on_failure(state, keys):

@@ -862,5 +862,68 @@ class TestTheEvidenceIsAttributedToTheRightCheck(unittest.TestCase):
                           "the gate blocked on a contest with no way to clear it")
 
 
+
+class TestAnEditScriptFollowedByChecksStaysClearable(unittest.TestCase):
+    """Seventh round, from a real session. One Bash call applied edits with an inline
+    script, then ran `ruff check ... && pytest ... | tail -2`. One test failed. Two
+    checks, neither owning the exit status, so the red was keyed on the WHOLE line --
+    and re-running that line repeats the edits, which an edit script asserting its
+    old text refuses by design. The test was fixed and pytest went green; the gate
+    still blocked. The unsatisfiable gate, a third time."""
+
+    LINE = ("python3 - <<'EOF'\nfrom pathlib import Path\nedit('a.py')\nEOF\n"
+            "cd backend && uv run ruff check app && uv run pytest tests -q 2>&1 | tail -2")
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = EvidenceFixture(self._tmp.name)
+        self.fx.track(self.fx.repo, dict(SEARCH, session_id="s1"))
+
+    def _red(self):
+        self.fx.track(self.fx.repo,
+                      dict(bash(self.LINE, stdout="1 failed, 36 passed"), session_id="s1"))
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"))
+
+    def test_the_red_is_filed_under_each_check_not_the_line(self):
+        self._red()
+        self.assertEqual(sorted(self.fx.state()["red_checks"]), ["pytest", "ruff check"])
+
+    def test_re_running_each_check_clears_it(self):
+        self._red()
+        self.fx.track(self.fx.repo, dict(
+            bash("cd backend && uv run pytest tests -q", stdout="37 passed"), session_id="s1"))
+        self.assertIsNotNone(self.fx.state().get("contested"),
+                             "pytest alone cleared a red ruff may own")
+        self.fx.track(self.fx.repo, dict(
+            bash("uv run ruff check app", stdout="All checks passed!"), session_id="s1"))
+        self.assertIsNone(self.fx.state().get("contested"))
+        self.assertIsNone(self.fx.stop(self.fx.repo, "s1"))
+
+    def test_an_ambiguous_green_clears_nothing(self):
+        """`ruff check . ; pytest | tail` saying "9 passed" proves pytest, not ruff."""
+        self._red()
+        self.fx.track(self.fx.repo, dict(
+            bash("ruff check . ; pytest -q | tail -1", stdout="37 passed"), session_id="s1"))
+        self.assertEqual(sorted(self.fx.state()["red_checks"]), ["pytest", "ruff check"])
+
+    def test_a_red_an_older_version_keyed_on_the_line_is_refiled(self):
+        """A session already stuck must come unstuck after the upgrade."""
+        shown = _TRACKER.norm_command(self.LINE)
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        st = dict(self.fx.state())
+        st["red_checks"] = {shown: {"cmd": shown, "check": shown, "exit": None,
+                                    "at": "2026-11-20T00:26:25Z"}}
+        st["contested"] = {"keys": ["k1"], "cmd": shown, "exit": None,
+                           "at": "2026-11-20T00:26:25Z", "claimed": "worked"}
+        self.fx.write_state(self.fx.repo, "s1", st)
+        for green in (("uv run pytest tests", "37 passed"),
+                      ("ruff check app", "All checks passed!")):
+            self.fx.track(self.fx.repo, dict(bash(green[0], stdout=green[1]), session_id="s1"))
+        self.assertEqual(self.fx.state().get("red_checks"), {})
+        self.assertIsNone(self.fx.state().get("contested"))
+
+
 if __name__ == "__main__":
     unittest.main()
