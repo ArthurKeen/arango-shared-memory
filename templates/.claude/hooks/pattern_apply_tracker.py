@@ -475,7 +475,7 @@ def _record_check(state, command, passed, code, when):
     entries.append({"at": when, "cmd": shown, "check": key, "ok": bool(passed),
                     "exit": code})
     state["verifications"] = entries[-MAX_VERIFICATIONS:]
-    reds = _refile_whole_line_reds(dict(state.get("red_checks") or {}))
+    reds = _refile_whole_line_reds(dict(state.get("red_checks") or {}), entries)
     idents = check_identities(command)
     if passed:
         # Re-running a check and getting green supersedes the evidence. It is an
@@ -492,17 +492,32 @@ def _record_check(state, command, passed, code, when):
     state["red_checks"] = reds
 
 
-def _refile_whole_line_reds(reds):
+def _refile_whole_line_reds(reds, ledger=()):
     """Re-file reds an older version keyed on a whole command line under its checks.
 
     Without this, a session already holding one stays blocked after the upgrade:
     the fix stops new ones being written but the old key still can only be cleared
     by re-running the line that wrote it.
+
+    The stored line is cut at MAX_CMD, so a long one -- an inline edit script
+    followed by `pytest`, `ruff check` and `mypy` -- can lose every check it named.
+    Its checks can't be read back from it, and keeping the line as the key leaves
+    the same unsatisfiable gate this re-filing exists to remove. Such a red is filed
+    under every check this session has run instead (from `ledger`, the
+    verifications), so each must go green on its own: strictness kept, and still
+    clearable. With no checks in the ledger it stays as it is.
     """
+    ran = []
+    for e in ledger:
+        ident = (e or {}).get("check") or ""
+        if ident and _identity_of(ident) == ident and ident not in ran:
+            ran.append(ident)
     out = {}
     for key, entry in reds.items():
         cmd = (entry or {}).get("cmd") or ""
         idents = check_identities(cmd) if key == cmd else [key]
+        if key == cmd and idents == [key] and len(cmd) >= MAX_CMD and ran:
+            idents = ran
         if len(idents) > 1 or (idents and idents[0] != key):
             for ident in idents:
                 out.setdefault(ident, dict(entry, check=ident))

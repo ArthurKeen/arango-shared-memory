@@ -924,6 +924,55 @@ class TestAnEditScriptFollowedByChecksStaysClearable(unittest.TestCase):
         self.assertEqual(self.fx.state().get("red_checks"), {})
         self.assertIsNone(self.fx.state().get("contested"))
 
+    def _legacy_truncated_red(self, ran=()):
+        """A whole-line red whose stored line was cut before it named any check."""
+        long_line = ("python3 - <<'EOF'\n" + "edit('a.py')\n" * 200
+                     + "EOF\nruff check app && pytest tests -q | tail -2")
+        shown = _TRACKER.norm_command(long_line)
+        self.assertEqual(_TRACKER.check_identities(shown), [shown],
+                         "fixture must lose every check to truncation")
+        self.fx.track(self.fx.repo, dict(applied("worked"), session_id="s1"))
+        st = dict(self.fx.state())
+        st["verifications"] = [
+            {"at": "2026-11-20T00:20:00Z", "cmd": shown, "check": shown, "ok": False,
+             "exit": None}] + [
+            {"at": "2026-11-20T00:10:00Z", "cmd": c, "check": c, "ok": True, "exit": 0}
+            for c in ran]
+        st["red_checks"] = {shown: {"cmd": shown, "check": shown, "exit": None,
+                                    "at": "2026-11-20T00:26:25Z"}}
+        st["contested"] = {"keys": ["k1"], "cmd": shown, "exit": None,
+                           "at": "2026-11-20T00:26:25Z", "claimed": "worked"}
+        self.fx.write_state(self.fx.repo, "s1", st)
+
+    def test_a_truncated_legacy_red_is_refiled_under_the_checks_this_session_ran(self):
+        """Re-filing read the checks from the stored line, which is cut at MAX_CMD;
+        a long edit script left none, so the red stayed keyed on the line and a green
+        pytest could not clear it."""
+        self._legacy_truncated_red()
+        self.fx.track(self.fx.repo, dict(
+            bash("uv run pytest tests", stdout="37 passed"), session_id="s1"))
+        self.assertEqual(self.fx.state().get("red_checks"), {})
+        self.assertIsNone(self.fx.state().get("contested"))
+        self.assertIsNone(self.fx.stop(self.fx.repo, "s1"))
+
+    def test_a_truncated_legacy_red_needs_every_check_the_session_ran(self):
+        """Strictness kept: filed under each check run, so one green clears only its own."""
+        self._legacy_truncated_red(ran=("ruff check", "mypy"))
+        self.fx.track(self.fx.repo, dict(
+            bash("uv run pytest tests", stdout="37 passed"), session_id="s1"))
+        self.assertEqual(sorted(self.fx.state()["red_checks"]), ["mypy", "ruff check"])
+        self.assertIsNotNone(self.fx.state().get("contested"))
+        for green in (("ruff check app", "All checks passed!"),
+                      ("mypy src", "Success: no issues found in 3 source files")):
+            self.fx.track(self.fx.repo, dict(bash(green[0], stdout=green[1]), session_id="s1"))
+        self.assertEqual(self.fx.state().get("red_checks"), {})
+        self.assertIsNone(self.fx.state().get("contested"))
+
+    def test_a_truncated_legacy_red_stays_put_when_no_check_has_run(self):
+        """Nothing to file it under; a non-check command must not drop it."""
+        self._legacy_truncated_red()
+        before = dict(self.fx.state()["red_checks"])
+        self.assertEqual(_TRACKER._refile_whole_line_reds(before, []), before)
 
 if __name__ == "__main__":
     unittest.main()
